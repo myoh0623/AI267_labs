@@ -14,6 +14,9 @@ usage() {
 AI267 간단 명령
 
   ai267 04              이전 교재 Lab을 정리하고 Task 04 Lab 실행
+  ai267 start 04        Lab과 Task 04 시험 환경을 한 번에 준비
+  ai267 inspect 04      Task 04 시험 리소스 상태 확인
+  ai267 finish 04       채점하고, 만점이면 리소스 자동 정리
   ai267 list            Task와 연결된 교재 Lab 목록
   ai267 status [04]     현재 또는 지정 Task Lab 상태
   ai267 check 04        Task 04 시험 환경 사전 점검
@@ -33,6 +36,16 @@ case "${command}" in
   help|-h|--help) usage ;;
   list) exec "${EXAM_LAB}" lab-env list ;;
   validate) exec "${EXAM_LAB}" validate ;;
+  start)
+    target=${2:-}
+    [[ -n "${target}" ]] || { usage; exit 2; }
+    "${EXAM_LAB}" preflight "${target}"
+    "${EXAM_LAB}" lab-env switch "${target}"
+    "${EXAM_LAB}" prepare "${target}"
+    "${EXAM_LAB}" status "${target}"
+    printf '\nTask %s 준비 완료. 웹 문제의 요구 사항을 수행한 뒤 실행하세요:\n' "${target}"
+    printf '  ai267 finish %s\n' "${target}"
+    ;;
   status)
     target=${2:-all}
     exec "${EXAM_LAB}" lab-env status "${target}"
@@ -44,6 +57,14 @@ case "${command}" in
       exec "${EXAM_LAB}" preflight-all
     fi
     exec "${EXAM_LAB}" preflight "${target}"
+    ;;
+  inspect)
+    target=${2:-}
+    [[ -n "${target}" ]] || { usage; exit 2; }
+    if [[ "${target}" == all ]]; then
+      exec "${EXAM_LAB}" status-all
+    fi
+    exec "${EXAM_LAB}" status "${target}"
     ;;
   exam)
     target=${2:-}
@@ -60,6 +81,21 @@ case "${command}" in
       exec "${EXAM_LAB}" grade-all "${@:3}"
     fi
     exec "${EXAM_LAB}" grade "${target}" "${@:3}"
+    ;;
+  finish)
+    target=${2:-}
+    [[ -n "${target}" && "${target}" != all ]] || { usage; exit 2; }
+    if "${EXAM_LAB}" grade "${target}"; then
+      printf '\n만점입니다. Task %s 시험 리소스와 활성 교재 Lab을 정리합니다.\n' "${target}"
+      "${EXAM_LAB}" cleanup "${target}" --yes
+      "${EXAM_LAB}" lab-env switch 10
+      printf '정리 완료. 다음 문제는 예를 들어 ai267 start 05 로 시작하세요.\n'
+    else
+      result=$?
+      printf '\n아직 통과하지 못했습니다. 수정할 수 있도록 리소스를 그대로 보존합니다.\n' >&2
+      printf '상태 확인: ai267 inspect %s\n' "${target}" >&2
+      exit "${result}"
+    fi
     ;;
   reset)
     target=${2:-}
