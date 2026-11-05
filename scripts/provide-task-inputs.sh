@@ -25,12 +25,49 @@ case "${task}" in
       --from-literal=rbac_subject=developer1 \
       --from-literal=login_account_provided=false \
       --from-literal=course_login_accounts=admin,developer \
-      --from-literal=instruction='developer1은 시험에서 지정한 RBAC subject이며 별도 로그인 계정을 만들지 않는다.' \
+      --from-literal=allowed_group=devops-wala \
+      --from-literal=allowed_group_members=developer,rajan,punit \
+      --from-literal=admin_group=rhoai-exam-admins \
+      --from-literal=admin_group_members=raja,andrew \
+      --from-literal=instruction='지정된 이름은 RBAC/Auth subject다. OAuth 암호 파일을 수정하거나 별도 로그인 계정을 만들 필요가 없다.' \
       --dry-run=client -o yaml | oc apply -f - >/dev/null
+    lab_require_command jq
+    auth_json=$(oc get auth.services.platform.opendatahub.io auth -o json 2>/dev/null \
+      | jq -c '{apiVersion,kind,metadata:{name:.metadata.name},spec}' || printf '{}')
+    oc create configmap exam-provided-auth-backup -n "${namespace}" \
+      --from-literal=auth.json="${auth_json}" \
+      --from-literal=restore_note='Task 01 cleanup이 기존 Auth spec을 복원한다.' \
+      --dry-run=client -o yaml | oc apply -f - >/dev/null
+    unset auth_json
     ;;
   02)
     create_file_configmap exam-provided-workbench-inputs \
       "${task_dir}/inputs/create_experiment_runs.py" create_experiment_runs.py
+    oc create configmap exam-provided-custom-image-source -n "${namespace}" \
+      --from-file=Containerfile="${task_dir}/inputs/custom-image/Containerfile" \
+      --from-file=requirements.txt="${task_dir}/inputs/custom-image/requirements.txt" \
+      --dry-run=client -o yaml | oc apply -f - >/dev/null
+    oc create configmap exam-provided-workbench-compatibility -n "${namespace}" \
+      --from-literal=legacy_size_selector='RHOAI 3.0부터 HardwareProfile로 대체됨' \
+      --from-literal=required_profiles='MediumSmall:1-2CPU/16Gi, My-medium:1-2CPU/1-2Gi' \
+      --from-literal=git_repository='https://github.com/RedHatTraining/AI26X-apps' \
+      --from-literal=git_branch=RHOAI3.3 \
+      --from-literal=existing_workbench=git-experiments \
+      --dry-run=client -o yaml | oc apply -f - >/dev/null
+    lab_require_command jq
+    culler_existed=false
+    culler_json='{}'
+    if oc get configmap notebook-controller-culler-config -n redhat-ods-applications >/dev/null 2>&1; then
+      culler_existed=true
+      culler_json=$(oc get configmap notebook-controller-culler-config -n redhat-ods-applications -o json \
+        | jq -c '{apiVersion,kind,metadata:{name:.metadata.name,namespace:.metadata.namespace},data}')
+    fi
+    oc create configmap exam-provided-culler-backup -n "${namespace}" \
+      --from-literal=existed="${culler_existed}" \
+      --from-literal=culler.json="${culler_json}" \
+      --from-literal=restore_note='Task 02 cleanup이 기존 notebook culler 설정을 복원한다.' \
+      --dry-run=client -o yaml | oc apply -f - >/dev/null
+    unset culler_existed culler_json
     ;;
   03)
     if ! oc get secret dspa-db -n "${namespace}" >/dev/null 2>&1; then
@@ -42,9 +79,24 @@ case "${task}" in
     fi
     create_file_configmap exam-provided-pipeline-source \
       "${task_dir}/inputs/fraud_pipeline.py" fraud_pipeline.py
+    oc create configmap exam-provided-elyra-source -n "${namespace}" \
+      --from-file=data_ingestion.py="${task_dir}/inputs/elyra/data_ingestion.py" \
+      --from-file=data_preprocessing.py="${task_dir}/inputs/elyra/data_preprocessing.py" \
+      --from-file=data_training_and_forecasting.py="${task_dir}/inputs/elyra/data_training_and_forecasting.py" \
+      --from-file=issues_prediction.pipeline="${task_dir}/inputs/elyra/issues_prediction.pipeline" \
+      --dry-run=client -o yaml | oc apply -f - >/dev/null
     oc annotate configmap exam-provided-pipeline-source -n "${namespace}" \
       ex267.practice/data-uri='s3://ex267-task03/data/transactions.csv' \
       ex267.practice/source='adapted-from-RedHatTraining/AI26X-apps' --overwrite >/dev/null
+    oc create configmap exam-provided-elyra-contract -n "${namespace}" \
+      --from-literal=pipeline_file=issues_prediction.pipeline \
+      --from-literal=workbench=pipelines-elyra-wb \
+      --from-literal=pvc_size=10Gi \
+      --from-literal=runtime_image='quay.io/redhattraining/forecast-pipeline-runtime:1.0' \
+      --from-literal=connection=aws-connection-fraud-s3 \
+      --from-literal=outputs='data.csv,clean-data.csv,forecast-data.csv' \
+      --from-literal=schedule_seconds=300 \
+      --dry-run=client -o yaml | oc apply -f - >/dev/null
     ;;
   04)
     if ! oc get servingruntime kserve-ovms -n "${namespace}" >/dev/null 2>&1; then
@@ -74,6 +126,21 @@ case "${task}" in
       --from-literal=fraud-s3="${storage_entry}" --dry-run=client -o yaml | oc apply -f - >/dev/null
     oc label secret storage-config -n "${namespace}" \
       ex267.practice/input=true ex267.practice/task="${task}" --overwrite >/dev/null
+    multimodel_api=false
+    if oc api-resources --api-group=serving.kserve.io -o name 2>/dev/null \
+      | grep -q '^inferenceservices'; then
+      if oc get deployments -A -l control-plane=modelmesh-controller -o name 2>/dev/null | grep -q .; then
+        multimodel_api=true
+      fi
+    fi
+    oc create configmap exam-provided-serving-compatibility -n "${namespace}" \
+      --from-literal=source_version=RHOAI2.13 \
+      --from-literal=current_version=RHOAI3.3 \
+      --from-literal=modelmesh_available="${multimodel_api}" \
+      --from-literal=legacy_mode='ModelMesh multi-model' \
+      --from-literal=current_mode='KServe RawDeployment with external route and optional token authentication' \
+      --from-literal=custom_runtime_source=kserve-ovms \
+      --dry-run=client -o yaml | oc apply -f - >/dev/null
     unset minio_access minio_secret minio_endpoint minio_bucket storage_entry
     ;;
   05)

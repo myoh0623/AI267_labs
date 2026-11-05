@@ -17,10 +17,10 @@ from typing import Any, Callable
 
 
 TASKS = {
-    "01": ("ex267-fraud", 24, "프로젝트·RBAC·S3 연결"),
-    "02": ("ex267-t02-workbench", 30, "Workbench·PVC·실험 증적"),
-    "03": ("ex267-t03-pipeline", 36, "KFP v2 Pipeline·실험 비교"),
-    "04": ("ex267-t04-serving", 36, "OpenVINO KServe 모델 서빙"),
+    "01": ("ex267-fraud", 24, "플랫폼·사용자·프로젝트·S3"),
+    "02": ("ex267-t02-workbench", 30, "Workbench·이미지·Git·S3"),
+    "03": ("ex267-t03-pipeline", 36, "KFP·Elyra Pipeline·예약 실행"),
+    "04": ("ex267-t04-serving", 36, "OpenVINO·Custom Runtime·인증"),
     "05": ("ex267-t05-vllm", 30, "vLLM·GPU 배치 진단"),
     "06": ("ex267-t06-registry", 30, "Model Registry·계보"),
     "07": ("ex267-t07-monitoring", 30, "TrustyAI·플랫폼 모니터링"),
@@ -30,6 +30,7 @@ TASKS = {
 }
 
 SHA256 = re.compile(r"^(?:sha256:)?[0-9a-f]{64}$")
+GIT_SHA = re.compile(r"^[0-9a-f]{40}$")
 PINNED_IMAGE = re.compile(r"@sha256:[0-9a-f]{64}$")
 TODO_VALUES = {"", "todo", "replace_me", "replace-me", "pending", "unknown", "n/a"}
 
@@ -106,6 +107,10 @@ def is_sha(value: Any) -> bool:
     return bool(SHA256.fullmatch(str(value or "").strip().lower()))
 
 
+def is_git_sha(value: Any) -> bool:
+    return bool(GIT_SHA.fullmatch(str(value or "").strip().lower()))
+
+
 def cm_data(oc: Oc, name: str, namespace: str) -> dict[str, str]:
     return dig(oc.get("configmap", name, namespace), "data", default={}) or {}
 
@@ -146,43 +151,128 @@ def result(check_id: str, description: str, points: int, passed: bool, detail: s
 
 
 def grade_01(oc: Oc, ns: str) -> list[Result]:
+    platform = cm_data(oc, "platform-evidence", ns)
+    csvs = oc.list_all("clusterserviceversion")
+    operator_ready = any(
+        str(dig(item, "status", "phase", default="")).lower() == "succeeded"
+        and (
+            "openshift ai" in str(dig(item, "spec", "displayName", default="")).lower()
+            or "rhods-operator" in str(dig(item, "metadata", "name", default="")).lower()
+        )
+        for item in csvs
+    )
+    dscs = oc.list_all("datasciencecluster")
+    dsc_ready = any(
+        condition_true(item)
+        or any(
+            str(component.get("managementState", "")).lower() == "managed"
+            for component in (dig(item, "status", "components", default={}) or {}).values()
+        )
+        for item in dscs
+    )
+    r1 = operator_ready and dsc_ready and has_values(
+        platform, ["operator_csv", "datasciencecluster", "managed_components"]
+    ) and platform.get("dsc_ready", "").lower() == "true" \
+        and platform.get("dashboard_verified", "").lower() == "true"
+
+    user_group = oc.get("group", "devops-wala")
+    admin_group = oc.get("group", "rhoai-exam-admins")
+    user_members = set(user_group.get("users", []) if user_group else [])
+    admin_members = set(admin_group.get("users", []) if admin_group else [])
+    auth = oc.get("auth.services.platform.opendatahub.io", "auth") \
+        or oc.get("auth.services.platform.opendatahub.io", "auth", "redhat-ods-applications")
+    allowed_groups = set(dig(auth, "spec", "allowedGroups", default=[]) or [])
+    admin_groups = set(dig(auth, "spec", "adminGroups", default=[]) or [])
+    identity = cm_data(oc, "identity-evidence", ns)
+    managed_groups = all(
+        dig(group, "metadata", "labels", "ex267.practice/task", default="") == "01"
+        for group in (user_group, admin_group) if group
+    ) and user_group is not None and admin_group is not None
+    r2 = user_members == {"developer", "rajan", "punit"} \
+        and admin_members == {"raja", "andrew"} \
+        and "devops-wala" in allowed_groups \
+        and "rhoai-exam-admins" in admin_groups \
+        and "system:authenticated" not in allowed_groups \
+        and managed_groups \
+        and identity.get("authenticated_wildcard_removed", "").lower() == "true"
+
     namespace = oc.get("namespace", ns)
     labels = dig(namespace, "metadata", "labels", default={}) or {}
-    r1 = labels.get("team") == "northstar-risk" and labels.get("environment") == "exam"
+    r3 = labels.get("team") == "northstar-risk" and labels.get("environment") == "exam"
 
     rolebindings = oc.list("rolebinding", ns)
-    roles_for_user: list[str] = []
+    roles_by_user: dict[str, list[str]] = {}
     for binding in rolebindings:
         subjects = binding.get("subjects", []) or []
-        if any(subject.get("kind") == "User" and subject.get("name") == "developer1" for subject in subjects):
-            roles_for_user.append(dig(binding, "roleRef", "name", default=""))
-    r2 = "edit" in roles_for_user and not ({"admin", "cluster-admin"} & set(roles_for_user))
+        role_name = dig(binding, "roleRef", "name", default="")
+        for subject in subjects:
+            if subject.get("kind") == "User":
+                roles_by_user.setdefault(subject.get("name", ""), []).append(role_name)
+    developer_roles = roles_by_user.get("developer1", [])
+    r4 = "edit" in developer_roles and not ({"admin", "cluster-admin"} & set(developer_roles))
+    r5 = all("admin" in roles_by_user.get(name, []) for name in ("rajan", "punit")) \
+        and "edit" in roles_by_user.get("suraj", []) \
+        and not any("cluster-admin" in roles_by_user.get(name, []) for name in ("rajan", "punit", "suraj")) \
+        and identity.get("project_admin_users") == "rajan,punit" \
+        and identity.get("project_edit_users") == "developer1,suraj"
 
     connection = oc.get("secret", "fraud-s3", ns)
     annotation = dig(connection, "metadata", "annotations", "opendatahub.io/connection-type-protocol")
-    r3 = annotation == "s3" and secret_values_are_real(
+    r6 = annotation == "s3" and secret_values_are_real(
         connection,
         ["AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_S3_ENDPOINT", "AWS_S3_BUCKET"],
     )
 
     evidence = cm_data(oc, "fraud-s3-evidence", ns)
-    r4 = has_values(evidence, ["input_key", "output_key", "input_sha256", "output_sha256", "verified_from_new_process"]) \
+    r7 = has_values(evidence, ["input_key", "output_key", "input_sha256", "output_sha256", "verified_from_new_process"]) \
         and is_sha(evidence.get("input_sha256")) and is_sha(evidence.get("output_sha256")) \
         and evidence.get("verified_from_new_process", "").lower() == "true"
 
+    r8 = bool(auth) and allowed_groups == {"devops-wala"} \
+        and admin_groups == {"rhoai-exam-admins"} \
+        and identity.get("allowed_group") == "devops-wala" \
+        and identity.get("admin_group") == "rhoai-exam-admins"
+
     return [
-        result("01-1", "프로젝트 팀·환경 라벨", 6, r1, "team=northstar-risk, environment=exam"),
-        result("01-2", "developer1 최소 권한 edit RoleBinding", 6, r2, f"roles={roles_for_user or ['none']}"),
-        result("01-3", "fraud-s3 protocol·endpoint·bucket·Secret", 6, r3, "Secret 값은 출력하지 않음"),
-        result("01-4", "새 프로세스 read/write SHA-256 증적", 6, r4, "fraud-s3-evidence ConfigMap"),
+        result("01-1", "RHOAI Operator·DataScienceCluster·Dashboard 검증", 3, r1, f"csv_ready={operator_ready}, dsc_ready={dsc_ready}"),
+        result("01-2", "사용자·관리자 그룹 구성과 Auth 연결", 3, r2, f"users={sorted(user_members)}, admins={sorted(admin_members)}"),
+        result("01-3", "프로젝트 팀·환경 라벨", 3, r3, "team=northstar-risk, environment=exam"),
+        result("01-4", "developer1 최소 권한 edit RoleBinding", 3, r4, f"roles={developer_roles or ['none']}"),
+        result("01-5", "rajan·punit admin, suraj edit 프로젝트 협업 권한", 3, r5, "namespace 범위 RoleBinding"),
+        result("01-6", "fraud-s3 protocol·endpoint·bucket·Secret", 3, r6, "Secret 값은 출력하지 않음"),
+        result("01-7", "새 프로세스 read/write SHA-256 증적", 3, r7, "fraud-s3-evidence ConfigMap"),
+        result("01-8", "Dashboard 접근 allowlist가 지정 두 그룹으로 제한됨", 3, r8, "Auth/auth"),
     ]
 
 
 def grade_02(oc: Oc, ns: str) -> list[Result]:
+    image_stream = oc.get("imagestream", "custom-workbench", ns)
+    tags = dig(image_stream, "spec", "tags", default=[]) or []
+    image_tag = next((item for item in tags if item.get("name") == "1.0"), {})
+    tag_annotations = image_tag.get("annotations", {}) or {}
+    dependencies = str(tag_annotations.get("opendatahub.io/notebook-python-dependencies", "")).lower()
+    image_labels = dig(image_stream, "metadata", "labels", default={}) or {}
+    r1 = image_stream is not None \
+        and image_labels.get("opendatahub.io/notebook-image") == "true" \
+        and "seaborn" in dependencies and "0.12.2" in dependencies \
+        and "python-json-logger" in dependencies and "2.0.7" in dependencies \
+        and non_todo(dig(image_tag, "from", "name", default=""))
+
     notebook = oc.get("notebook", "risk-lab", ns)
     container = dig(notebook, "spec", "template", "spec", "containers", 0, default={}) or {}
     image = container.get("image", "")
-    r1 = bool(PINNED_IMAGE.search(image))
+    custom_image = cm_data(oc, "custom-image-evidence", ns)
+    culler_resource = oc.get("configmap", "notebook-controller-culler-config", "redhat-ods-applications")
+    culler = dig(culler_resource, "data", default={}) or {}
+    r2 = "custom-workbench" in image.lower() \
+        and is_sha(custom_image.get("image_digest")) \
+        and custom_image.get("seaborn_version") == "0.12.2" \
+        and custom_image.get("python_json_logger_version") == "2.0.7" \
+        and custom_image.get("idle_culling_endpoint_verified", "").lower() == "true" \
+        and culler.get("ENABLE_CULLING", "").lower() == "true" \
+        and culler.get("CULL_IDLE_TIME") == "240" \
+        and culler.get("IDLENESS_CHECK_PERIOD") == "1" \
+        and dig(culler_resource, "metadata", "labels", "ex267.practice/task", default="") == "02"
 
     volumes = dig(notebook, "spec", "template", "spec", "volumes", default=[]) or []
     mounts = container.get("volumeMounts", []) or []
@@ -191,28 +281,86 @@ def grade_02(oc: Oc, ns: str) -> list[Result]:
     pvc = oc.get("pvc", storage_claim, ns) if storage_claim else None
     storage = dig(pvc, "spec", "resources", "requests", "storage", default="")
     mounted = any(mount.get("mountPath") == "/opt/app-root/src" for mount in mounts)
-    r2 = storage in {"10Gi", "10240Mi"} and mounted
+    r3 = storage in {"10Gi", "10240Mi"} and mounted
 
     resources = container.get("resources", {}) or {}
     requests = resources.get("requests", {}) or {}
     limits = resources.get("limits", {}) or {}
-    r3 = all(non_todo(values.get(key)) for values in (requests, limits) for key in ("cpu", "memory"))
+    r4 = requests.get("cpu") in {"1", "1000m"} \
+        and requests.get("memory") in {"1Gi", "1024Mi"} \
+        and limits.get("cpu") in {"2", "2000m"} \
+        and limits.get("memory") in {"2Gi", "2048Mi"}
+
+    medium_small = oc.get("hardwareprofile", "medium-small", ns)
+    my_medium = oc.get("hardwareprofile", "my-medium", ns)
+    medium_ids = {item.get("identifier"): item for item in (dig(medium_small, "spec", "identifiers", default=[]) or [])}
+    my_ids = {item.get("identifier"): item for item in (dig(my_medium, "spec", "identifiers", default=[]) or [])}
+    r5 = str(dig(medium_ids, "cpu", "minCount", default="")) == "1" \
+        and str(dig(medium_ids, "cpu", "maxCount", default="")) == "2" \
+        and str(dig(medium_ids, "memory", "minCount", default="")) == "16Gi" \
+        and str(dig(medium_ids, "memory", "maxCount", default="")) == "16Gi" \
+        and str(dig(my_ids, "cpu", "minCount", default="")) == "1" \
+        and str(dig(my_ids, "cpu", "maxCount", default="")) == "2" \
+        and str(dig(my_ids, "memory", "minCount", default="")) == "1Gi" \
+        and str(dig(my_ids, "memory", "maxCount", default="")) == "2Gi"
+
+    existing = oc.get("notebook", "git-experiments", ns)
+    existing_container = dig(existing, "spec", "template", "spec", "containers", 0, default={}) or {}
+    env_configmaps = {
+        dig(item, "configMapRef", "name")
+        for item in existing_container.get("envFrom", []) or []
+        if dig(item, "configMapRef", "name")
+    }
+    env_cm = oc.get("configmap", "git-experiments-env", ns)
+    admin_evidence = cm_data(oc, "workbench-admin-evidence", ns)
+    r6 = "cuda" in str(existing_container.get("image", "")).lower() \
+        and "git-experiments-env" in env_configmaps \
+        and dig(env_cm, "data", "RANDOM_SIZE") == "40" \
+        and admin_evidence.get("stopped_after_test", "").lower() == "true"
+
+    git_evidence = cm_data(oc, "git-collaboration-evidence", ns)
+    r7 = git_evidence.get("repository") == "https://github.com/RedHatTraining/AI26X-apps" \
+        and git_evidence.get("source_branch") == "RHOAI3.3" \
+        and git_evidence.get("feature_branch") in {"experiment", "experiment2"} \
+        and is_git_sha(git_evidence.get("feature_commit")) \
+        and is_git_sha(git_evidence.get("merge_commit")) \
+        and is_sha(git_evidence.get("experiment_notebook_sha256")) \
+        and git_evidence.get("clean_worktree", "").lower() == "true"
+
+    connection = oc.get("secret", "projects-data-connection", ns)
+    connection_annotation = dig(connection, "metadata", "annotations", "opendatahub.io/connection-type-protocol")
+    notebook_annotations = dig(notebook, "metadata", "annotations", default={}) or {}
+    connection_refs = str(notebook_annotations.get("opendatahub.io/connections", "")) \
+        + json.dumps(container.get("envFrom", []), ensure_ascii=False)
+    r8 = connection_annotation == "s3" \
+        and secret_values_are_real(connection, ["AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_S3_ENDPOINT", "AWS_S3_BUCKET"]) \
+        and "projects-data-connection" in connection_refs
+
+    s3_evidence = cm_data(oc, "workbench-s3-evidence", ns)
+    r9 = has_values(s3_evidence, ["upload_key", "download_sha256"]) \
+        and is_sha(s3_evidence.get("download_sha256")) \
+        and s3_evidence.get("verified_from_workbench", "").lower() == "true"
 
     evidence = cm_data(oc, "workbench-evidence", ns)
-    r4 = has_values(evidence, ["git_revision", "data_version", "seed", "image_digest", "artifact_uri"]) \
+    reproducible = has_values(evidence, ["git_revision", "data_version", "seed", "image_digest", "artifact_uri"]) \
         and is_sha(evidence.get("image_digest"))
     try:
         runs = int(evidence.get("tensorboard_runs", "0"))
     except ValueError:
         runs = 0
-    r5 = runs >= 2 and evidence.get("restart_proof", "").lower() == "true"
+    r10 = reproducible and runs >= 2 and evidence.get("restart_proof", "").lower() == "true"
 
     return [
-        result("02-1", "risk-lab 승인 image digest", 6, r1, image or "Notebook 없음"),
-        result("02-2", "10Gi PVC와 /opt/app-root/src mount", 6, r2, f"claim={storage_claim}, size={storage or 'none'}"),
-        result("02-3", "CPU·memory request/limit", 6, r3, json.dumps(resources, ensure_ascii=False)),
-        result("02-4", "실험 재현 metadata", 6, r4, "workbench-evidence ConfigMap"),
-        result("02-5", "재시작 영속성과 TensorBoard 2개 run", 6, r5, f"runs={runs}"),
+        result("02-1", "custom-workbench:1.0 build·catalog metadata", 3, r1, "seaborn 0.12.2, python-json-logger 2.0.7"),
+        result("02-2", "risk-lab custom image 실행·package·culling 검증", 3, r2, image or "Notebook 없음"),
+        result("02-3", "10Gi PVC와 /opt/app-root/src mount", 3, r3, f"claim={storage_claim}, size={storage or 'none'}"),
+        result("02-4", "My-medium 1/2 CPU·1/2Gi 적용", 3, r4, json.dumps(resources, ensure_ascii=False)),
+        result("02-5", "MediumSmall·My-medium HardwareProfile", 3, r5, "legacy size selector의 3.3 대응"),
+        result("02-6", "기존 git-experiments를 CUDA·ConfigMap으로 수정 후 중지", 3, r6, "RANDOM_SIZE=40"),
+        result("02-7", "Jupyter Git feature branch·commit·merge", 3, r7, "git-collaboration-evidence"),
+        result("02-8", "Workbench S3 connection 연결", 3, r8, "projects-data-connection"),
+        result("02-9", "Workbench에서 S3 upload·download 검증", 3, r9, "workbench-s3-evidence"),
+        result("02-10", "재현 metadata·재시작·TensorBoard 2개 run", 3, r10, f"runs={runs}"),
     ]
 
 
@@ -241,13 +389,72 @@ def grade_03(oc: Oc, ns: str) -> list[Result]:
         and has_values(evidence, ["approved_model_uri", "approved_model_sha256"]) \
         and is_sha(evidence.get("approved_model_sha256"))
 
+    scheduled = oc.list("scheduledworkflow", ns) + oc.list("cronworkflow", ns)
+    schedule_evidence = cm_data(oc, "schedule-evidence", ns)
+    interval = schedule_evidence.get("interval_seconds", "")
+    schedule_name = schedule_evidence.get("schedule_name", "")
+    scheduled_names = {dig(item, "metadata", "name", default="") for item in scheduled}
+    scheduled_succeeded = any(
+        dig(workflow, "metadata", "labels", "ex267.io/scheduled-run", default="").lower() == "true"
+        for workflow in workflows
+    )
+    r7 = schedule_evidence.get("pipeline_name") == "tas1-devops-wala" \
+        and schedule_name == "tas1-devops-wala-s1" \
+        and interval == "300" \
+        and schedule_evidence.get("enabled", "").lower() == "true" \
+        and non_todo(schedule_evidence.get("observed_run")) \
+        and bool(scheduled) \
+        and (schedule_name in scheduled_names or any("tas1-devops-wala" in name for name in scheduled_names)) \
+        and scheduled_succeeded
+
+    elyra_notebook = oc.get("notebook", "pipelines-elyra-wb", ns)
+    elyra_container = dig(elyra_notebook, "spec", "template", "spec", "containers", 0, default={}) or {}
+    elyra_volumes = dig(elyra_notebook, "spec", "template", "spec", "volumes", default=[]) or []
+    elyra_claim = next(
+        (dig(volume, "persistentVolumeClaim", "claimName") for volume in elyra_volumes
+         if dig(volume, "persistentVolumeClaim", "claimName")),
+        None,
+    )
+    elyra_pvc = oc.get("pvc", elyra_claim, ns) if elyra_claim else None
+    elyra_size = dig(elyra_pvc, "spec", "resources", "requests", "storage", default="")
+    elyra = cm_data(oc, "elyra-evidence", ns)
+    elyra_image = str(elyra_container.get("image", "")).lower()
+    r8 = elyra_notebook is not None \
+        and elyra_size in {"10Gi", "10240Mi"} \
+        and ("standard" in elyra_image or "datascience" in elyra_image) \
+        and elyra.get("pipeline_file") == "issues_prediction.pipeline" \
+        and elyra.get("workbench_name") == "pipelines-elyra-wb" \
+        and elyra.get("workbench_pvc") == elyra_claim \
+        and "forecast-pipeline-runtime" in elyra.get("runtime_image", "") \
+        and elyra.get("secret_name") == "aws-connection-fraud-s3" \
+        and is_git_sha(elyra.get("git_revision")) \
+        and non_todo(elyra.get("workflow_name"))
+
+    elyra_workflow = next(
+        (workflow for workflow in workflows
+         if dig(workflow, "metadata", "name", default="") == elyra.get("workflow_name")),
+        None,
+    )
+    r9 = elyra_workflow is not None \
+        and all(is_sha(elyra.get(key)) for key in (
+            "data_csv_sha256", "clean_data_csv_sha256", "forecast_data_csv_sha256"
+        )) \
+        and len({
+            str(elyra.get("data_csv_sha256", "")).removeprefix("sha256:"),
+            str(elyra.get("clean_data_csv_sha256", "")).removeprefix("sha256:"),
+            str(elyra.get("forecast_data_csv_sha256", "")).removeprefix("sha256:"),
+        }) == 3
+
     return [
-        result("03-1", "DSPA Ready", 6, r1, "dspa/dspa"),
-        result("03-2", "validate·train·evaluate 독립 컴포넌트", 6, r2, "fraud-training-pipeline ConfigMap"),
-        result("03-3", "KFP SDK 2.14.3+ compiled definition", 6, r3, f"kfp={sdk_version or 'missing'}"),
-        result("03-4", "ServiceAccount·Secret·resources", 6, r4, "pipeline-evidence ConfigMap"),
-        result("03-5", "cache·retry·run prefix 안전성", 6, r5, "pipeline-evidence ConfigMap"),
-        result("03-6", "서로 다른 max_depth 두 run과 승인 모델", 6, r6, f"succeeded={len(workflows)}, depths={sorted(depths)}"),
+        result("03-1", "DSPA Ready", 4, r1, "dspa/dspa"),
+        result("03-2", "validate·train·evaluate 독립 컴포넌트", 4, r2, "fraud-training-pipeline ConfigMap"),
+        result("03-3", "KFP SDK 2.14.3+ compiled definition", 4, r3, f"kfp={sdk_version or 'missing'}"),
+        result("03-4", "ServiceAccount·Secret·resources", 4, r4, "pipeline-evidence ConfigMap"),
+        result("03-5", "cache·retry·run prefix 안전성", 4, r5, "pipeline-evidence ConfigMap"),
+        result("03-6", "서로 다른 max_depth 두 run과 승인 모델", 4, r6, f"succeeded={len(workflows)}, depths={sorted(depths)}"),
+        result("03-7", "tas1-devops-wala 5분 예약과 예약 실행 성공", 4, r7, f"schedules={sorted(scheduled_names)}"),
+        result("03-8", "Standard Data Science·10Gi Elyra Workbench와 3-node 설정", 4, r8, f"claim={elyra_claim}, size={elyra_size or 'none'}"),
+        result("03-9", "Elyra 실행 성공과 세 출력 파일 SHA-256", 4, r9, elyra.get("workflow_name", "missing")),
     ]
 
 
@@ -262,7 +469,8 @@ def grade_04(oc: Oc, ns: str) -> list[Result]:
 
     runtime = str(model.get("runtime", "")).lower()
     model_format = str(dig(model, "modelFormat", "name", default="")).lower()
-    r2 = "openvino" in runtime and model_format in {"onnx", "openvino_ir", "openvino"}
+    r2 = ("openvino" in runtime or "ovms" in runtime) \
+        and model_format in {"onnx", "openvino_ir", "openvino"}
 
     resources = model.get("resources", {}) or {}
     requests = resources.get("requests", {}) or {}
@@ -281,13 +489,60 @@ def grade_04(oc: Oc, ns: str) -> list[Result]:
         and evidence.get("rollback_verified", "").lower() == "true" \
         and is_sha(evidence.get("rollback_model_sha256"))
 
+    custom_runtime = oc.get("servingruntime", "fraud-custom-runtime", ns)
+    runtime_containers = dig(custom_runtime, "spec", "containers", default=[]) or []
+    runtime_image = dig(runtime_containers, 0, "image", default="")
+    runtime_formats = {
+        str(item.get("name", "")).lower()
+        for item in (dig(custom_runtime, "spec", "supportedModelFormats", default=[]) or [])
+    }
+    runtime_protocols = {
+        str(item).lower()
+        for item in (dig(custom_runtime, "spec", "protocolVersions", default=[]) or [])
+    }
+    runtime_evidence = cm_data(oc, "custom-runtime-evidence", ns)
+    r7 = custom_runtime is not None \
+        and bool(PINNED_IMAGE.search(runtime_image)) \
+        and "sklearn" in runtime_formats \
+        and "v2" in runtime_protocols \
+        and runtime_evidence.get("runtime_name") == "fraud-custom-runtime" \
+        and is_sha(runtime_evidence.get("runtime_image_digest")) \
+        and runtime_evidence.get("supported_format", "").lower() == "sklearn" \
+        and runtime_evidence.get("validation_http", "").startswith("2")
+
+    mode = cm_data(oc, "serving-mode-evidence", ns)
+    route = oc.get("route", "fraud-v2", ns)
+    route_host = dig(route, "spec", "host", default="")
+    deployment_mode = dig(service, "metadata", "annotations", "serving.kserve.io/deploymentMode", default="")
+    r8 = mode.get("legacy_multimodel_status") == "mapped-to-rhoai-3.3-rawdeployment" \
+        and mode.get("current_deployment_mode") == "RawDeployment" \
+        and deployment_mode == "RawDeployment" \
+        and route is not None \
+        and mode.get("external_route") == route_host
+
+    service_account = oc.get("serviceaccount", "infer-serviceaccount", ns)
+    token_secret_name = mode.get("token_secret", "")
+    token_secret = oc.get("secret", token_secret_name, ns) if non_todo(token_secret_name) else None
+    token_secret_sa = dig(token_secret, "metadata", "annotations", "kubernetes.io/service-account.name", default="")
+    token_secret_type = dig(token_secret, "type", default="")
+    r9 = service_account is not None \
+        and mode.get("token_service_account") == "infer-serviceaccount" \
+        and token_secret_type == "kubernetes.io/service-account-token" \
+        and token_secret_sa == "infer-serviceaccount" \
+        and mode.get("authenticated_http", "").startswith("2") \
+        and mode.get("unauthenticated_http", "") in {"401", "403"} \
+        and mode.get("public_http", "").startswith("2")
+
     return [
-        result("04-1", "models/fraud/2 immutable artifact", 6, r1, f"storage={uri or connection_path or 'missing'}"),
-        result("04-2", "OpenVINO runtime·model format", 6, r2, f"runtime={runtime}, format={model_format}"),
-        result("04-3", "1 CPU·2Gi request/limit", 6, r3, json.dumps(resources, ensure_ascii=False)),
-        result("04-4", "InferenceService Ready·URL", 6, r4, "fraud-v2"),
-        result("04-5", "V2 정상·invalid shape 응답", 6, r5, f"normal={normal_http or 'none'}, invalid={invalid_http or 'none'}"),
-        result("04-6", "재생성·rollback 재검증", 6, r6, "serving-evidence ConfigMap"),
+        result("04-1", "models/fraud/2 immutable artifact", 4, r1, f"storage={uri or connection_path or 'missing'}"),
+        result("04-2", "OpenVINO runtime·model format", 4, r2, f"runtime={runtime}, format={model_format}"),
+        result("04-3", "1 CPU·2Gi request/limit", 4, r3, json.dumps(resources, ensure_ascii=False)),
+        result("04-4", "InferenceService Ready·URL", 4, r4, "fraud-v2"),
+        result("04-5", "V2 정상·invalid shape 응답", 4, r5, f"normal={normal_http or 'none'}, invalid={invalid_http or 'none'}"),
+        result("04-6", "재생성·rollback 재검증", 4, r6, "serving-evidence ConfigMap"),
+        result("04-7", "고정 digest Custom ServingRuntime·sklearn·V2", 4, r7, runtime_image or "runtime missing"),
+        result("04-8", "2.13 Multi-model 요구를 3.3 RawDeployment·외부 Route로 검증", 4, r8, route_host or "route missing"),
+        result("04-9", "infer-serviceaccount 토큰 인증과 무인증 전환 호출", 4, r9, "Secret 값은 출력하지 않음"),
     ]
 
 

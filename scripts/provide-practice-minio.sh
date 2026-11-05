@@ -4,9 +4,10 @@ set -Eeuo pipefail
 readonly SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 source "${SCRIPT_DIR}/lab-common.sh"
 
-task=$(lab_normalize_task "${1:-}") || lab_die "Task 번호를 지정하세요: 01, 03, 04, 08, 10"
+task=$(lab_normalize_task "${1:-}") || lab_die "Task 번호를 지정하세요: 01, 02, 03, 04, 08, 10"
 case "${task}" in
   01) bucket=ex267-task01 ;;
+  02) bucket=ex267-task02 ;;
   03) bucket=ex267-task03 ;;
   04) bucket=ex267-task04 ;;
   08) bucket=ex267-task08 ;;
@@ -74,15 +75,31 @@ oc annotate secret exam-provided-minio -n "${namespace}" \
   --overwrite >/dev/null
 
 case "${task}" in
+  02)
+    input_file="${LAB_ROOT}/tasks/02-workbench/inputs/create_experiment_runs.py"
+    s3cmd -c "${s3cfg}" put "${input_file}" \
+      "s3://${bucket}/input/create_experiment_runs.py" >/dev/null
+    input_sha=$(sha256sum "${input_file}" | awk '{print $1}')
+    oc create configmap exam-provided-workbench-data -n "${namespace}" \
+      --from-literal=input_uri="s3://${bucket}/input/create_experiment_runs.py" \
+      --from-literal=input_sha256="${input_sha}" \
+      --dry-run=client -o yaml | oc apply -f - >/dev/null
+    ;;
   03)
     input_file="${LAB_ROOT}/tasks/03-pipeline/inputs/transactions.csv"
     s3cmd -c "${s3cfg}" put "${input_file}" \
       "s3://${bucket}/data/transactions.csv" >/dev/null
+    support_file="${LAB_ROOT}/tasks/03-pipeline/inputs/support-cases.csv"
+    s3cmd -c "${s3cfg}" put "${support_file}" \
+      "s3://${bucket}/data/support-cases.csv" >/dev/null
     input_sha=$(sha256sum "${input_file}" | awk '{print $1}')
+    support_sha=$(sha256sum "${support_file}" | awk '{print $1}')
     oc create configmap exam-provided-pipeline-data -n "${namespace}" \
       --from-literal=dataset_uri="s3://${bucket}/data/transactions.csv" \
       --from-literal=dataset_sha256="${input_sha}" \
       --from-literal=dataset_revision=synthetic-fraud-v1 \
+      --from-literal=elyra_dataset_uri="s3://${bucket}/data/support-cases.csv" \
+      --from-literal=elyra_dataset_sha256="${support_sha}" \
       --dry-run=client -o yaml | oc apply -f - >/dev/null
     ;;
   04)
@@ -139,7 +156,7 @@ case "${task}" in
     ;;
 esac
 
-for provided_configmap in exam-provided-pipeline-data exam-provided-model-artifacts exam-provided-lmeval-cache; do
+for provided_configmap in exam-provided-workbench-data exam-provided-pipeline-data exam-provided-model-artifacts exam-provided-lmeval-cache; do
   if oc get configmap "${provided_configmap}" -n "${namespace}" >/dev/null 2>&1; then
     oc label configmap "${provided_configmap}" -n "${namespace}" \
       ex267.practice/input=true ex267.practice/task="${task}" --overwrite >/dev/null

@@ -54,4 +54,33 @@ data:
   artifact_prefix_pattern: TODO
   approved_model_uri: TODO
   approved_model_sha256: TODO
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: schedule-evidence
+  namespace: ex267-t03-pipeline
+data:
+  pipeline_name: TODO
+  schedule_name: TODO
+  interval_seconds: TODO
+  enabled: "false"
+  observed_run: TODO
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: elyra-evidence
+  namespace: ex267-t03-pipeline
+data:
+  pipeline_file: TODO
+  workbench_name: TODO
+  workbench_pvc: TODO
+  runtime_image: TODO
+  secret_name: TODO
+  git_revision: TODO
+  workflow_name: TODO
+  data_csv_sha256: TODO
+  clean_data_csv_sha256: TODO
+  forecast_data_csv_sha256: TODO
 

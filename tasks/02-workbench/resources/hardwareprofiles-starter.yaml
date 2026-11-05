@@ -1,0 +1,45 @@
+apiVersion: infrastructure.opendatahub.io/v1
+kind: HardwareProfile
+metadata:
+  name: medium-small
+  namespace: ex267-t02-workbench
+  annotations:
+    opendatahub.io/disabled: "false"
+    opendatahub.io/display-name: MediumSmall
+spec:
+  identifiers:
+    - identifier: cpu
+      displayName: CPU
+      resourceType: CPU
+      minCount: "1"
+      defaultCount: "1"
+      maxCount: "2"
+    - identifier: memory
+      displayName: Memory
+      resourceType: Memory
+      minCount: 16Gi
+      defaultCount: 16Gi
+      maxCount: 16Gi
+---
+apiVersion: infrastructure.opendatahub.io/v1
+kind: HardwareProfile
+metadata:
+  name: my-medium
+  namespace: ex267-t02-workbench
+  annotations:
+    opendatahub.io/disabled: "false"
+    opendatahub.io/display-name: My-medium
+spec:
+  identifiers:
+    - identifier: cpu
+      displayName: CPU
+      resourceType: CPU
+      minCount: "1"
+      defaultCount: "1"
+      maxCount: "2"
+    - identifier: memory
+      displayName: Memory
+      resourceType: Memory
+      minCount: 1Gi
+      defaultCount: 1Gi
+      maxCount: 2Gi

@@ -51,4 +51,30 @@ data:
   recreated: "false"
   rollback_verified: "false"
   rollback_model_sha256: TODO
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: custom-runtime-evidence
+  namespace: ex267-t04-serving
+data:
+  runtime_name: TODO
+  runtime_image_digest: TODO
+  supported_format: TODO
+  validation_http: TODO
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: serving-mode-evidence
+  namespace: ex267-t04-serving
+data:
+  legacy_multimodel_status: TODO
+  current_deployment_mode: TODO
+  external_route: TODO
+  token_service_account: TODO
+  token_secret: TODO
+  authenticated_http: TODO
+  unauthenticated_http: TODO
+  public_http: TODO
 

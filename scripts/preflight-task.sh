@@ -21,7 +21,15 @@ check_api() {
 }
 
 case "${task}" in
-  02) check_api kubeflow.org notebooks 'Kubeflow Notebook CRD' ;;
+  01)
+    check_api datasciencecluster.opendatahub.io datascienceclusters 'DataScienceCluster CRD'
+    check_api services.platform.opendatahub.io auths 'OpenShift AI Auth CRD'
+    ;;
+  02)
+    check_api kubeflow.org notebooks 'Kubeflow Notebook CRD'
+    check_api infrastructure.opendatahub.io hardwareprofiles 'HardwareProfile CRD'
+    check_api build.openshift.io buildconfigs 'OpenShift BuildConfig'
+    ;;
   03)
     check_api datasciencepipelinesapplications.opendatahub.io datasciencepipelinesapplications 'DSPA CRD'
     if lab_api_available pipelines.kubeflow.org pipelines; then
@@ -29,6 +37,7 @@ case "${task}" in
     else
       check_api argoproj.io workflows 'Argo Workflow CRD'
     fi
+    check_api kubeflow.org scheduledworkflows 'KFP ScheduledWorkflow CRD'
     ;;
   04|05) check_api serving.kserve.io inferenceservices 'KServe InferenceService CRD' ;;
   06)

@@ -1,6 +1,6 @@
 # 교재 Lab 기반 시험 환경
 
-이 기능은 **문제·배점·정답·채점 기준을 바꾸지 않는다.** 교재의 검증된 예제를 별도 `ai267-chXX-*` namespace에 준비해, 응시자가 OpenShift AI 3.3의 정상 리소스 형태와 동작을 확인한 다음 기존 `ex267-*` 시험 namespace에서 문제를 풀도록 돕는다.
+이 기능은 기존 10개 문제를 다른 문제로 교체하지 않는다. 교재의 검증된 예제를 별도 `ai267-chXX-*` namespace에 준비하고, EX267-V2.13 번호형 실습의 누락된 학습 행동은 기존 Task 01~04의 추가 채점 항목으로 연결한다. 응시자는 OpenShift AI 3.3의 정상 리소스 형태와 동작을 확인한 다음 `ex267-*` 시험 namespace에서 직접 문제를 푼다.
 
 ## 사용 순서
 
@@ -42,15 +42,16 @@ ai267 start 01
 # Console: Workloads -> Secrets -> exam-provided-minio
 ```
 
-Task 01·03·04·08·10에는 문제 전용 bucket과 `exam-provided-minio`가 자동 생성된다. 이 Secret은 시험지에서 제공하는 endpoint, bucket, access key, secret key에 해당하는 **입력 자료**다. 채점 대상인 `fraud-s3` 또는 `aws-connection-fraud-s3`는 `REPLACE_ME` 상태로 유지되며, 응시자가 Console에서 제공값을 적용하고 올바른 annotation·리소스 설정을 완성해야 한다.
+Task 01·02·03·04·08·10에는 문제 전용 bucket과 `exam-provided-minio`가 자동 생성된다. 이 Secret은 시험지에서 제공하는 endpoint, bucket, access key, secret key에 해당하는 **입력 자료**다. 채점 대상인 `fraud-s3`, `projects-data-connection`, `aws-connection-fraud-s3`는 `REPLACE_ME` 상태로 유지되며, 응시자가 Console에서 제공값을 적용하고 올바른 annotation·리소스 설정을 완성해야 한다.
 
 ## 문제별 연결
 
 | Task | 교재 기준 환경 | 목적 |
 | --- | --- | --- |
-| 01·02 | Chapter 02 | S3 connection, Workbench, PVC, custom image의 정상 예시 |
-| 03 | Chapter 06 | DSPA, KFP v2, object storage의 정상 예시 |
-| 04 | Chapter 04 | KServe V2 inference와 OCI ModelCar의 정상 예시 |
+| 01 | Chapter 01 | Project/RBAC 정상 예시와 설치된 RHOAI/DSC 확인 |
+| 02 | Chapter 02 | S3 connection, Workbench, PVC, custom image, BuildConfig의 정상 예시 |
+| 03 | Chapter 06 | DSPA, KFP v2, Elyra, object storage의 정상 예시 |
+| 04 | Chapter 04 | OpenVINO/Custom ServingRuntime, KServe V2, route/token의 정상 예시 |
 | 06 | `serving-modelregistry` | Registry component, MariaDB, ONNX v1/v2와 OCI registry |
 | 07 | Chapter 05 | TrustyAI capture, reference data, drift request의 정상 예시 |
 | 08 | Chapter 08 | CPU 양자화 결과와 LMEvalJob server-side schema 검증 |

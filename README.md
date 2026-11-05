@@ -1,6 +1,6 @@
 # EX267 v3.3 실습형 연습 환경
 
-웹 모의시험의 10개 과제를 실제 OpenShift/OpenShift AI 리소스로 연습하기 위한 문제별 실습 묶음이다. `ai267/v3.3/labs`의 검증된 리소스 형태를 참고했지만, 강의 시연과 달리 초기 상태를 일부러 미완성으로 만들고 응시자가 수정한 결과를 자동 채점한다.
+웹 모의시험의 기존 10개 과제를 실제 OpenShift/OpenShift AI 리소스로 연습하기 위한 문제별 실습 묶음이다. 기존 문제를 삭제하거나 다른 문제로 교체하지 않고, AI267 3.3 교재 Lab과 공개 EX267-V2.13 디렉터리의 번호형 Markdown 34개를 준비 리소스·문제 지침·채점·정리에 모두 연결했다. 강의 시연과 달리 초기 상태를 일부러 미완성으로 만들고 응시자가 수정한 실제 결과를 자동 채점한다.
 
 - GitHub: https://github.com/myoh0623/AI267_labs
 
@@ -22,7 +22,7 @@ ai267 inspect 04
 ai267 finish 04
 ```
 
-`start`는 기존 교재 Lab 정리, 필요한 Lab 실행, 시험 namespace 준비, 합성 데이터·입력 코드·기준 런타임 제공과 초기 상태 확인을 한 번에 처리한다. MinIO가 필요한 문제는 클러스터의 자격 증명을 자동으로 읽으므로 별도 입력 프롬프트가 없다. Task 01·03·04·08·10에는 전용 bucket과 `exam-provided-minio` Secret이 시험 제공값으로 생성되지만, 채점 대상 S3 Secret과 답안 리소스는 일부러 미완성으로 남겨 응시자가 직접 구성한다. `finish`는 채점에 통과하면 시험·교재 리소스를 정리하고, 실패하면 수정할 수 있도록 그대로 보존한다. `KUBECONFIG=$HOME/.auth/lab-kubeconfig`와 설치 경로는 자동으로 적용된다.
+`start`는 기존 교재 Lab 정리, 필요한 Lab 실행, 시험 namespace 준비, 합성 데이터·입력 코드·기준 런타임 제공과 초기 상태 확인을 한 번에 처리한다. MinIO가 필요한 문제는 클러스터의 자격 증명을 자동으로 읽으므로 별도 입력 프롬프트가 없다. Task 01·02·03·04·08·10에는 전용 bucket과 `exam-provided-minio` Secret이 시험 제공값으로 생성되지만, 채점 대상 S3 Secret과 답안 리소스는 일부러 미완성으로 남겨 응시자가 직접 구성한다. `finish`는 채점에 통과하면 시험·교재 리소스를 정리하고, 실패하면 수정할 수 있도록 그대로 보존한다. Task 01의 Dashboard Auth와 Task 02의 cluster-wide culler 설정은 시작 시 백업되어 정리할 때 원래 값으로 복원된다. `KUBECONFIG=$HOME/.auth/lab-kubeconfig`와 설치 경로는 자동으로 적용된다.
 
 전체 원본 명령이 필요한 경우:
 
@@ -62,10 +62,10 @@ cd AI267_labs
 
 | 문제 | 실습 | 기본 프로젝트 | 점수 |
 | --- | --- | --- | ---: |
-| 01 | 프로젝트·RBAC·S3 연결 | `ex267-fraud` | 24 |
-| 02 | Workbench·PVC·실험 증적 | `ex267-t02-workbench` | 30 |
-| 03 | KFP v2 Pipeline·실험 비교 | `ex267-t03-pipeline` | 36 |
-| 04 | OpenVINO KServe 모델 서빙 | `ex267-t04-serving` | 36 |
+| 01 | 플랫폼·사용자·프로젝트·S3 | `ex267-fraud` | 24 |
+| 02 | Workbench·이미지·Git·S3 | `ex267-t02-workbench` | 30 |
+| 03 | KFP·Elyra Pipeline·예약 실행 | `ex267-t03-pipeline` | 36 |
+| 04 | OpenVINO·Custom Runtime·인증 | `ex267-t04-serving` | 36 |
 | 05 | vLLM·GPU 배치 진단 | `ex267-t05-vllm` | 30 |
 | 06 | Model Registry·계보 | `ex267-t06-registry` | 30 |
 | 07 | TrustyAI·플랫폼 모니터링 | `ex267-t07-monitoring` | 30 |
@@ -80,6 +80,8 @@ cd AI267_labs
 - 외부 자격 증명은 Git에 저장하지 않는다. 실습 클러스터의 MinIO 값은 실행 중에만 읽어 문제 namespace의 `exam-provided-minio`로 제공하며, 응시자가 이를 채점 대상 Secret에 적용한다.
 - 일부 외부 시스템 결과는 정해진 이름의 `*-evidence` ConfigMap에 digest·ID·HTTP 상태만 기록한다. 실제 Secret이나 원문 데이터는 기록하지 않는다.
 - `cleanup`은 `ex267.practice/managed=true`와 해당 문제 번호 라벨이 모두 일치하는 프로젝트만 삭제한다.
+- [V213-COVERAGE.md](V213-COVERAGE.md), [source-coverage.yaml](source-coverage.yaml), [source-inventory.sha256](source-inventory.sha256)은 고정 commit의 원본 Markdown 34개 전부에 대한 문제/채점 대응과 원문 checksum을 명시한다. `validate`가 개수, 경로, checksum 목록, 중복과 잘못된 채점 ID를 검사한다.
+- V2.13의 size selector는 3.3 `HardwareProfile`, 제거된 ModelMesh Multi-model은 지원되는 3.3 KServe `RawDeployment`로 대응한다. 학습 목표는 유지하고 폐기된 구성 요소를 재설치하지 않는다.
 - Task 09의 소형 mock 애플리케이션은 원격 AI267 자료에 Chapter 09가 없을 때 `vendor/` 복사본을 사용한다.
 - 현재 클러스터에는 GPU node가 없으므로 Task 05의 실제 vLLM 처리량 측정만 완전 수행할 수 없다. 가짜 GPU를 만들지 않고 Pending·scheduler 진단을 연습한다.
 
@@ -87,10 +89,10 @@ cd AI267_labs
 
 | Task | `ai267 start`가 준비하는 선행 입력 |
 | --- | --- |
-| 01 | MinIO bucket/credential, `developer1` identity 계약 |
-| 02 | TensorBoard run 생성용 합성 Python 코드 |
-| 03 | MinIO 합성 CSV, DSPA DB Secret, KFP v2 pipeline 소스 |
-| 04 | 교재 ONNX v2/v1, SHA-256, 공식 OpenVINO ServingRuntime |
+| 01 | MinIO bucket/credential, identity/Auth 복원 계약, 플랫폼 증적 skeleton |
+| 02 | MinIO, Custom Image source, 불완전 `git-experiments`, TensorBoard 코드, culler 복원본 |
+| 03 | MinIO 합성 CSV, DSPA DB Secret, KFP v2·Elyra source와 5분 schedule 계약 |
+| 04 | 교재 ONNX v2/v1, SHA-256, 공식 OpenVINO runtime, 2.13→3.3 serving 호환 계약 |
 | 05 | 실제 GPU node 수와 실행 가능 여부 |
 | 06 | 교재 Model Registry/MariaDB/OCI registry/ONNX 자산 |
 | 07 | Iris 기준 모델, client, versioned reference dataset |

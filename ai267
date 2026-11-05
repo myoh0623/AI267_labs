@@ -110,7 +110,7 @@ case "${command}" in
     load_minio_credentials "${target}"
     "${EXAM_LAB}" lab-env switch "${target}"
     "${EXAM_LAB}" prepare "${target}"
-    if [[ "${target}" == 01 || "${target}" == 03 || "${target}" == 04 || "${target}" == 08 || "${target}" == 10 ]]; then
+    if [[ "${target}" == 01 || "${target}" == 02 || "${target}" == 03 || "${target}" == 04 || "${target}" == 08 || "${target}" == 10 ]]; then
       bash "${PROVIDE_MINIO}" "${target}"
     fi
     bash "${PROVIDE_INPUTS}" "${target}"
@@ -158,6 +158,7 @@ case "${command}" in
     target=${2:-}
     [[ -n "${target}" && "${target}" != all ]] || { usage; exit 2; }
     if "${EXAM_LAB}" grade "${target}"; then
+      load_minio_credentials "${target}"
       printf '\n만점입니다. Task %s 시험 리소스와 활성 교재 Lab을 정리합니다.\n' "${target}"
       "${EXAM_LAB}" cleanup "${target}" --yes
       "${EXAM_LAB}" lab-env switch 10

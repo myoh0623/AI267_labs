@@ -4,6 +4,33 @@ set -Eeuo pipefail
 readonly SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 source "${SCRIPT_DIR}/lab-common.sh"
 
+read_minio_secret_value() {
+  local key encoded
+  for key in "$@"; do
+    encoded=$(oc get secret minio-secret -n minio \
+      -o "jsonpath={.data.${key}}" 2>/dev/null || true)
+    if [[ -n "${encoded}" ]]; then
+      printf '%s' "${encoded}" | base64 --decode
+      return 0
+    fi
+  done
+  return 1
+}
+
+load_course_minio_credentials() {
+  local access_key secret_key
+  if [[ -n "${MINIO_ACCESS_KEY:-}" && -n "${MINIO_SECRET_KEY:-}" ]]; then
+    return 0
+  fi
+  oc get secret minio-secret -n minio >/dev/null 2>&1 || return 0
+  access_key=$(read_minio_secret_value minio_root_user MINIO_ROOT_USER accesskey AWS_ACCESS_KEY_ID) || true
+  secret_key=$(read_minio_secret_value minio_root_password MINIO_ROOT_PASSWORD secretkey AWS_SECRET_ACCESS_KEY) || true
+  [[ -n "${access_key}" && -n "${secret_key}" ]] || return 0
+  export MINIO_ACCESS_KEY=${access_key}
+  export MINIO_SECRET_KEY=${secret_key}
+  unset access_key secret_key
+}
+
 usage() {
   cat <<'EOF'
 Usage:
@@ -14,13 +41,14 @@ Usage:
   ./exam-lab.sh lab-env cleanup <01-10|all> [--yes]
 
 교재 Lab은 별도 ai267-chXX-* namespace에 기준 환경만 준비합니다.
-시험 문제, ex267-* namespace, 채점 기준은 변경하지 않습니다.
+기존 10개 문제는 유지하며 번호형 실습 행동은 해당 Task의 추가 채점 항목으로 검증합니다.
 EOF
 }
 
 chapters_for_task() {
   case "$1" in
-    01|02) printf '%s\n' chapter-02-workbench ;;
+    01) printf '%s\n' chapter-01-projects ;;
+    02) printf '%s\n' chapter-02-workbench ;;
     03) printf '%s\n' chapter-06-pipelines ;;
     04) printf '%s\n' chapter-04-model-storage ;;
     07) printf '%s\n' chapter-05-trustyai ;;
@@ -55,6 +83,7 @@ cleanup_active_course_labs() {
 
 all_chapters() {
   printf '%s\n' \
+    chapter-01-projects \
     chapter-02-workbench \
     chapter-03-model-serving \
     chapter-04-model-storage \
@@ -67,10 +96,10 @@ all_chapters() {
 
 list_mapping() {
   cat <<'EOF'
-01  Chapter 02                 MinIO/S3 연결 기준 환경
-02  Chapter 02                 Workbench·PVC·커스텀 이미지 기준 환경
-03  Chapter 06                 DSPA·KFP v2 기준 환경
-04  Chapter 04                 KServe V2·ModelCar 기준 환경
+01  Chapter 01                 플랫폼·프로젝트·RBAC 기준 환경
+02  Chapter 02                 Workbench·PVC·커스텀 이미지·Git 기준 환경
+03  Chapter 06                 DSPA·KFP v2·Elyra·예약 실행 기준 환경
+04  Chapter 04                 KServe V2·custom runtime·인증 기준 환경
 05  -                          물리 GPU 필요; 기존 Pending 진단 환경 유지
 06  serving-modelregistry      Model Registry·MariaDB·ONNX v1/v2·교실 OCI registry
 07  Chapter 05                 TrustyAI capture·drift 기준 환경
@@ -98,6 +127,7 @@ run_chapter() {
   fi
 
   lab_log "${chapter}: ${action} (시험 문제/namespace에는 변경 없음)"
+  load_course_minio_credentials
   if [[ "${chapter}" == chapter-02-workbench && "${action}" == prepare ]] \
     && ! oc whoami -t >/dev/null 2>&1; then
     lab_log "인증서 kubeconfig 감지: Workbench OAuth URL 검사 대신 Pod Ready를 검증합니다."
@@ -113,6 +143,7 @@ run_chapter() {
 
 chapter_namespace() {
   case "$1" in
+    chapter-01-projects) printf '%s\n' ai267-ch01-projects ;;
     chapter-02-workbench) printf '%s\n' ai267-ch02-workbench ;;
     chapter-03-model-serving) printf '%s\n' ai267-ch03-serving ;;
     chapter-04-model-storage) printf '%s\n' ai267-ch04-storage ;;

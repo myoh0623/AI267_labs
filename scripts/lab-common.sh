@@ -103,10 +103,10 @@ lab_task_dir() {
 
 lab_list_tasks() {
   cat <<'EOF'
-01  프로젝트·RBAC·S3 연결               24점
-02  Workbench·PVC·실험 증적             30점
-03  KFP v2 Pipeline·실험 비교           36점
-04  OpenVINO KServe 모델 서빙            36점
+01  플랫폼·사용자·프로젝트·S3            24점
+02  Workbench·이미지·Git·S3             30점
+03  KFP·Elyra Pipeline·예약 실행         36점
+04  OpenVINO·Custom Runtime·인증         36점
 05  vLLM·GPU 배치 진단                  30점
 06  Model Registry·계보                 30점
 07  TrustyAI·플랫폼 모니터링             30점

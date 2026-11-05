@@ -1,12 +1,17 @@
 # 실제 클러스터 검증 결과
 
-검증일: 2026-11-05 (Asia/Seoul)
+기준 클러스터 검증일: 2026-11-05 (Asia/Seoul)<br>
+번호형 실습 완전 반영 검증일: 2026-11-06 (Asia/Seoul)
 
 대상: `student@100.94.27.27`, OpenShift 4.20.14 / OpenShift AI 3.3.1
 
 ## 결론
 
-문제와 채점 대상 리소스는 변경하지 않고, `ai267 start <task>`가 필요한 교재 Lab과 `exam-provided-*` 입력만 준비하도록 보완했다. 합성 데이터·코드·모델은 입력 자료이며 답안 Secret, InferenceService, LMEvalJob, evidence 값은 응시자가 직접 완성한다.
+기존 10개 문제를 유지하면서 V2.13 번호형 Markdown 34개를 모두 추적했다. 누락된 실습 행동은 Task 01~04에 추가하고 실제 리소스·evidence 채점으로 연결했다. `ai267 start <task>`는 필요한 교재 Lab과 `exam-provided-*` 입력만 준비한다. 합성 데이터·코드·모델은 입력 자료이며 답안 Group/Auth, Workbench/Image/Git/S3, Pipeline/Schedule/Elyra, ServingRuntime/InferenceService/인증 evidence는 응시자가 직접 완성한다.
+
+2026-11-06 변경분은 로컬 Bash/Python/YAML/채점 계약/34개 source coverage 검증을 통과했다. 같은 변경분을 실제 클러스터의 별도 검증 checkout에 복사해 Task 02~04의 `start`, 의도된 0점 초기 채점, `cleanup`과 신규 starter YAML server-side dry-run을 확인했다. Task 03 교재 Workflow는 `Succeeded`, Task 04 교재 ModelCar 추론은 HTTP 200이었다. Task 01은 기존 응시 리소스를 덮어쓰지 않고 플랫폼·Auth·DSC를 읽기 전용으로 검사했다.
+
+채점기의 모든 신규 성공 분기는 합성 Kubernetes API 응답을 사용하는 positive fixture로 통과시켰다. 이 검증은 환경 준비가 답안을 미리 완성하지 않으며, 응시자가 요구 리소스를 만들었을 때만 각 항목이 통과한다는 계약까지 포함한다.
 
 현재 클러스터의 유일한 물리적 제한은 GPU node가 0개라는 점이다. 따라서 Task 05의 YAML·Pending·scheduler 진단은 수행할 수 있지만 실제 vLLM GPU streaming과 성능 기준선은 GPU가 있는 환경에서만 만점 검증할 수 있다.
 
@@ -14,10 +19,10 @@
 
 | Task | 자동 제공 환경 | 실제 확인 결과 |
 | --- | --- | --- |
-| 01 | 전용 MinIO, identity 계약 | 기존 `ex267-fraud`를 보존하고 `developer1`이 로그인 계정이 아닌 RBAC subject임을 제공했다. |
-| 02 | Chapter 02, 합성 TensorBoard 코드 | 교재 Workbench Pod Ready, 2Gi PVC Bound, custom image build/push 완료. 시험 10Gi PVC와 입력 코드 생성 확인. |
-| 03 | Chapter 06, 합성 CSV, KFP v2 소스, DB Secret | 교재 Workflow `Succeeded`; 시험 namespace에서 제공 MinIO 값만으로 DSPA의 모든 condition과 `Ready=True` 확인. 소스는 KFP 2.15.2로 compile 확인. |
-| 04 | ONNX v2/v1, SHA-256, `kserve-ovms`, storage bridge | `fraud-v2` InferenceService `Ready=True`; OpenVINO KServe V2 infer가 HTTP 200과 FP32 `[1,2]` 응답 반환. |
+| 01 | 전용 MinIO, identity/platform 계약 | CSV `rhods-operator.3.3.1` Succeeded, `default-dsc` Ready/Managed와 cluster-scoped Auth API를 읽기 전용으로 확인했다. 기존 `ex267-fraud`는 보존했고 초기 채점은 답안 미완료로 실패했다. |
+| 02 | Chapter 02, custom image source, HardwareProfile starter, 합성 Git/S3/TensorBoard 입력 | MinIO 입력 없이 자동 시작, 교재 custom image build 완료, 시험 입력 생성, 신규 starter dry-run 성공, 10개 항목 모두 의도된 초기 실패, cleanup과 culler 원상복구 확인. |
+| 03 | Chapter 06, KFP·Elyra 소스, 합성 CSV, DB Secret | 교재 DSPA Ready와 Workflow Succeeded, 시험 입력 생성, Elyra starter dry-run 성공, 9개 항목 모두 의도된 초기 실패, cleanup 확인. 직접 `lab-env`를 실행해도 MinIO prompt가 생기지 않도록 보완했다. |
+| 04 | ONNX v2/v1, Custom ServingRuntime·인증 starter, storage bridge | 교재 ModelCar V2 infer HTTP 200, 시험 입력 생성, runtime/auth starter dry-run 성공, 9개 항목 모두 의도된 초기 실패, cleanup 확인. |
 | 05 | 실제 GPU node 수 | `gpu_node_count=0`, `full_runtime_possible=false`; 의도된 Pending과 scheduler 진단 경로 확인. 가짜 GPU는 만들지 않음. |
 | 06 | `serving-modelregistry` 교재 Lab | Model Registry component `Managed`, `redhattraining-model-registry` `Available=True`, MariaDB/Registry Pod 실행 확인. |
 | 07 | Chapter 05, Iris 기준 모델·client·reference | 교재 환경과 시험 namespace의 `iris-monitor`, runtime, client가 Ready 상태임을 확인. |
