@@ -35,7 +35,7 @@ case "${action}" in
     exec "${LAB_ROOT}/scripts/validate-local.sh"
     ;;
   lab-env)
-    exec "${LAB_ROOT}/scripts/lab-environment.sh" "${@:2}"
+    exec bash "${LAB_ROOT}/scripts/lab-environment.sh" "${@:2}"
     ;;
   preflight-all|prepare-all|status-all|grade-all|cleanup-all)
     exec "${LAB_ROOT}/scripts/all-tasks.sh" "${action%-all}" "${@:2}"
