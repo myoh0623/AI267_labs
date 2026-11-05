@@ -1,0 +1,76 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+SCRIPT_PATH=$(readlink -f -- "${BASH_SOURCE[0]}")
+LAB_HOME=${AI267_LAB_HOME:-$(cd -- "$(dirname -- "${SCRIPT_PATH}")" && pwd)}
+EXAM_LAB="${LAB_HOME}/exam-lab.sh"
+
+if [[ -z "${KUBECONFIG:-}" && -f "${HOME}/.auth/lab-kubeconfig" ]]; then
+  export KUBECONFIG="${HOME}/.auth/lab-kubeconfig"
+fi
+
+usage() {
+  cat <<'EOF'
+AI267 간단 명령
+
+  ai267 04              이전 교재 Lab을 정리하고 Task 04 Lab 실행
+  ai267 list            Task와 연결된 교재 Lab 목록
+  ai267 status [04]     현재 또는 지정 Task Lab 상태
+  ai267 check 04        Task 04 시험 환경 사전 점검
+  ai267 exam 04         Task 04 시험 namespace 준비
+  ai267 grade 04        Task 04 채점
+  ai267 reset 04        Task 04 시험 namespace 초기화
+  ai267 validate        설치 파일 검증
+
+교재 Lab은 한 번에 하나만 실행됩니다.
+EOF
+}
+
+[[ -x "${EXAM_LAB}" ]] || { echo "AI267 실습을 찾을 수 없습니다: ${EXAM_LAB}" >&2; exit 1; }
+
+command=${1:-help}
+case "${command}" in
+  help|-h|--help) usage ;;
+  list) exec "${EXAM_LAB}" lab-env list ;;
+  validate) exec "${EXAM_LAB}" validate ;;
+  status)
+    target=${2:-all}
+    exec "${EXAM_LAB}" lab-env status "${target}"
+    ;;
+  check)
+    target=${2:-}
+    [[ -n "${target}" ]] || { usage; exit 2; }
+    if [[ "${target}" == all ]]; then
+      exec "${EXAM_LAB}" preflight-all
+    fi
+    exec "${EXAM_LAB}" preflight "${target}"
+    ;;
+  exam)
+    target=${2:-}
+    [[ -n "${target}" ]] || { usage; exit 2; }
+    if [[ "${target}" == all ]]; then
+      exec "${EXAM_LAB}" prepare-all
+    fi
+    exec "${EXAM_LAB}" prepare "${target}"
+    ;;
+  grade)
+    target=${2:-}
+    [[ -n "${target}" ]] || { usage; exit 2; }
+    if [[ "${target}" == all ]]; then
+      exec "${EXAM_LAB}" grade-all "${@:3}"
+    fi
+    exec "${EXAM_LAB}" grade "${target}" "${@:3}"
+    ;;
+  reset)
+    target=${2:-}
+    [[ -n "${target}" ]] || { usage; exit 2; }
+    if [[ "${target}" == all ]]; then
+      exec "${EXAM_LAB}" cleanup-all --yes
+    fi
+    exec "${EXAM_LAB}" cleanup "${target}" --yes
+    ;;
+  [0-9]|0[1-9]|10)
+    exec "${EXAM_LAB}" lab-env switch "${command}"
+    ;;
+  *) usage; exit 2 ;;
+esac
