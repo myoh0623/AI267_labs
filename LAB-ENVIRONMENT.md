@@ -35,14 +35,14 @@ ai267 finish 01
 ./exam-lab.sh grade 04
 ```
 
-Task 01·02·03의 교재 환경은 MinIO를 사용한다. 자격 증명은 저장소에 넣지 말고 실행 시에만 환경 변수로 전달한다.
+Task 01·02·03의 교재 환경과 Task 04의 모델 저장소 연습은 MinIO를 사용한다. `ai267 start`가 `minio/minio-secret`에서 자격 증명을 자동으로 읽으므로 사용자가 access key나 secret key를 입력할 필요가 없다. 값은 저장소나 터미널 출력에 기록되지 않는다.
 
 ```bash
-read -rsp 'MinIO access key: ' MINIO_ACCESS_KEY; export MINIO_ACCESS_KEY; echo
-read -rsp 'MinIO secret key: ' MINIO_SECRET_KEY; export MINIO_SECRET_KEY; echo
-./exam-lab.sh lab-env switch 03
-unset MINIO_ACCESS_KEY MINIO_SECRET_KEY
+ai267 start 01
+# Console: Workloads -> Secrets -> exam-provided-minio
 ```
+
+Task 01·03·04에는 문제 전용 bucket과 `exam-provided-minio`가 자동 생성된다. 이 Secret은 시험지에서 제공하는 endpoint, bucket, access key, secret key에 해당하는 **입력 자료**다. 채점 대상인 `fraud-s3` 또는 `aws-connection-fraud-s3`는 `REPLACE_ME` 상태로 유지되며, 응시자가 Console에서 제공값을 적용하고 올바른 annotation·리소스 설정을 완성해야 한다.
 
 ## 문제별 연결
 
