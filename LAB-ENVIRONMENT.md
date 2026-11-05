@@ -80,3 +80,5 @@ Task 05는 물리 GPU가 필요하므로 교재 환경으로 GPU를 대신 만�
 ```
 
 `lab-env prepare all`은 의도적으로 거부된다.
+
+인증서 kubeconfig처럼 `oc whoami -t`가 토큰을 반환하지 않는 환경에서는 Chapter 02의 Workbench OAuth URL 검사 대신 Workbench Pod Ready를 확인한다. PVC, S3 Connection, 커스텀 이미지 빌드와 카탈로그 등록은 그대로 수행한다.
