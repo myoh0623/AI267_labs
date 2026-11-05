@@ -10,7 +10,8 @@ Usage:
   ./exam-lab.sh list
   ./exam-lab.sh validate
   ./exam-lab.sh lab-env list
-  ./exam-lab.sh lab-env prepare <01-10|all>
+  ./exam-lab.sh lab-env switch  <01-10>
+  ./exam-lab.sh lab-env prepare <01-10>
   ./exam-lab.sh lab-env status  <01-10|all>
   ./exam-lab.sh lab-env cleanup <01-10|all> [--yes]
   ./exam-lab.sh preflight-all
