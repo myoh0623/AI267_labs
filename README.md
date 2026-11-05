@@ -18,6 +18,7 @@ cd AI267_labs
 
 ./exam-lab.sh list
 ./exam-lab.sh preflight-all
+./exam-lab.sh lab-env prepare all
 ./exam-lab.sh prepare-all
 ./exam-lab.sh status-all
 
@@ -38,6 +39,8 @@ cd AI267_labs
 # 해당 문제의 전용 프로젝트만 제거
 ./exam-lab.sh cleanup 01 --yes
 ```
+
+`lab-env`는 문제를 바꾸거나 정답을 적용하지 않는다. 교재의 정상 예제를 별도 `ai267-chXX-*` namespace에 준비하고, 시험은 기존 `ex267-*` namespace에서 그대로 진행한다. 필요한 문제와 Chapter 연결, MinIO 자격 증명 입력 방법은 [LAB-ENVIRONMENT.md](LAB-ENVIRONMENT.md)를 참고한다.
 
 `grade`는 부분 점수를 보여주며, 모든 항목을 통과하지 못하면 종료 코드 1을 반환한다. 자동화에서 결과만 필요하면 `--json`을 추가한다.
 
