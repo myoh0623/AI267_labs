@@ -4,10 +4,75 @@ set -Eeuo pipefail
 SCRIPT_PATH=$(readlink -f -- "${BASH_SOURCE[0]}")
 LAB_HOME=${AI267_LAB_HOME:-$(cd -- "$(dirname -- "${SCRIPT_PATH}")" && pwd)}
 EXAM_LAB="${LAB_HOME}/exam-lab.sh"
+PROVIDE_MINIO="${LAB_HOME}/scripts/provide-practice-minio.sh"
 
 if [[ -z "${KUBECONFIG:-}" && -f "${HOME}/.auth/lab-kubeconfig" ]]; then
   export KUBECONFIG="${HOME}/.auth/lab-kubeconfig"
 fi
+
+normalize_task() {
+  case "$1" in
+    1|01) printf '01\n' ;;
+    2|02) printf '02\n' ;;
+    3|03) printf '03\n' ;;
+    4|04) printf '04\n' ;;
+    5|05) printf '05\n' ;;
+    6|06) printf '06\n' ;;
+    7|07) printf '07\n' ;;
+    8|08) printf '08\n' ;;
+    9|09) printf '09\n' ;;
+    10) printf '10\n' ;;
+    *) return 1 ;;
+  esac
+}
+
+read_secret_value() {
+  local namespace=$1 secret=$2
+  shift 2
+  local key encoded
+
+  for key in "$@"; do
+    encoded=$(oc get secret "${secret}" -n "${namespace}" \
+      -o "jsonpath={.data.${key}}" 2>/dev/null || true)
+    if [[ -n "${encoded}" ]]; then
+      printf '%s' "${encoded}" | base64 --decode
+      return 0
+    fi
+  done
+  return 1
+}
+
+load_minio_credentials() {
+  local task=$1 access_key secret_key
+  case "${task}" in
+    01|02|03|04) ;;
+    *) return 0 ;;
+  esac
+
+  if [[ -n "${MINIO_ACCESS_KEY:-}" && -n "${MINIO_SECRET_KEY:-}" ]]; then
+    printf '[ai267] 실행 환경에 설정된 MinIO 자격 증명을 사용합니다.\n'
+    return 0
+  fi
+
+  if ! oc get secret minio-secret -n minio >/dev/null 2>&1; then
+    printf '[ai267] ERROR: minio/minio-secret을 찾을 수 없어 시험 제공값을 준비할 수 없습니다.\n' >&2
+    return 1
+  fi
+
+  access_key=$(read_secret_value minio minio-secret \
+    minio_root_user MINIO_ROOT_USER accesskey AWS_ACCESS_KEY_ID) || true
+  secret_key=$(read_secret_value minio minio-secret \
+    minio_root_password MINIO_ROOT_PASSWORD secretkey AWS_SECRET_ACCESS_KEY) || true
+  if [[ -z "${access_key}" || -z "${secret_key}" ]]; then
+    printf '[ai267] ERROR: minio/minio-secret에서 MinIO 자격 증명 key를 찾을 수 없습니다.\n' >&2
+    return 1
+  fi
+
+  export MINIO_ACCESS_KEY=${access_key}
+  export MINIO_SECRET_KEY=${secret_key}
+  unset access_key secret_key
+  printf '[ai267] MinIO 시험 제공값을 클러스터에서 자동으로 불러왔습니다.\n'
+}
 
 usage() {
   cat <<'EOF'
@@ -39,9 +104,14 @@ case "${command}" in
   start)
     target=${2:-}
     [[ -n "${target}" ]] || { usage; exit 2; }
+    target=$(normalize_task "${target}") || { usage; exit 2; }
     "${EXAM_LAB}" preflight "${target}"
+    load_minio_credentials "${target}"
     "${EXAM_LAB}" lab-env switch "${target}"
     "${EXAM_LAB}" prepare "${target}"
+    if [[ "${target}" == 01 || "${target}" == 03 || "${target}" == 04 ]]; then
+      bash "${PROVIDE_MINIO}" "${target}"
+    fi
     "${EXAM_LAB}" status "${target}"
     printf '\nTask %s 준비 완료. 웹 문제의 요구 사항을 수행한 뒤 실행하세요:\n' "${target}"
     printf '  ai267 finish %s\n' "${target}"
