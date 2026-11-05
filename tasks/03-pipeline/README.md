@@ -2,6 +2,8 @@
 
 Pipeline ServiceAccount, S3 Secret skeleton, compiled definition/evidence ConfigMap이 제공된다.
 
+`ai267 start 03`은 `ex267-t03-pipeline/exam-provided-minio`에 endpoint, 전용 bucket과 자격 증명을 시험 제공값으로 준비한다. OpenShift Console의 **Workloads → Secrets → exam-provided-minio**에서 값을 확인해 채점 대상 `aws-connection-fraud-s3`와 DSPA 설정에 적용한다. 대상 Secret과 starter YAML은 계속 미완성 상태로 제공된다.
+
 ## 수행 목표
 
 1. 실제 S3 값을 설정하고 `resources/dspa-starter.yaml`로 DSPA를 Ready로 만든다.
