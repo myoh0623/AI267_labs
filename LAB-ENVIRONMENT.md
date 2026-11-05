@@ -8,7 +8,7 @@
 oc login https://api.<cluster>:6443
 
 ./exam-lab.sh lab-env list
-./exam-lab.sh lab-env prepare all
+./exam-lab.sh lab-env switch 01
 ./exam-lab.sh preflight-all
 ./exam-lab.sh prepare-all
 ./exam-lab.sh status-all
@@ -17,7 +17,7 @@ oc login https://api.<cluster>:6443
 한 문제만 연습할 때는 다음처럼 실행한다.
 
 ```bash
-./exam-lab.sh lab-env prepare 04
+./exam-lab.sh lab-env switch 04
 ./exam-lab.sh prepare 04
 ./exam-lab.sh grade 04
 ```
@@ -27,7 +27,7 @@ Task 01·02·03의 교재 환경은 MinIO를 사용한다. 자격 증명은 저�
 ```bash
 read -rsp 'MinIO access key: ' MINIO_ACCESS_KEY; export MINIO_ACCESS_KEY; echo
 read -rsp 'MinIO secret key: ' MINIO_SECRET_KEY; export MINIO_SECRET_KEY; echo
-./exam-lab.sh lab-env prepare 03
+./exam-lab.sh lab-env switch 03
 unset MINIO_ACCESS_KEY MINIO_SECRET_KEY
 ```
 
@@ -36,8 +36,8 @@ unset MINIO_ACCESS_KEY MINIO_SECRET_KEY
 | Task | 교재 기준 환경 | 목적 |
 | --- | --- | --- |
 | 01·02 | Chapter 02 | S3 connection, Workbench, PVC, custom image의 정상 예시 |
-| 03 | Chapters 06·07 | DSPA, KFP v2, object storage, 비교 run의 정상 예시 |
-| 04 | Chapters 03·04 | KServe V2 inference와 OCI ModelCar의 정상 예시 |
+| 03 | Chapter 06 | DSPA, KFP v2, object storage의 정상 예시 |
+| 04 | Chapter 04 | KServe V2 inference와 OCI ModelCar의 정상 예시 |
 | 07 | Chapter 05 | TrustyAI capture, reference data, drift request의 정상 예시 |
 | 08 | Chapter 08 | CPU 양자화 결과와 LMEvalJob server-side schema 검증 |
 | 09 | Chapter 09 | mock LLM, RAG, read-only tool, guardrail의 정상 예시 |
@@ -53,3 +53,17 @@ Task 05는 물리 GPU가 필요하므로 교재 환경으로 GPU를 대신 만�
 ```
 
 두 namespace 집합은 분리되어 있으므로 교재 기준 환경이 시험 정답을 자동 완성하지 않는다.
+
+## 한 번에 하나만 실행
+
+교재 Lab은 동시에 여러 개를 준비하지 않는다. 다음 문제로 이동할 때 `switch`를 실행하면 이전 `ai267-chXX-*` namespace를 먼저 정리하고 선택한 문제의 Lab 하나만 준비한다. Chapter 02의 공용 이미지 카탈로그와 Chapter 06·07의 MinIO bucket은 전환 중 보존한다.
+
+```bash
+./exam-lab.sh lab-env switch 03
+# Task 03 연습
+
+./exam-lab.sh lab-env switch 04
+# Chapter 06 환경 정리 후 Chapter 04 환경 준비
+```
+
+`lab-env prepare all`은 의도적으로 거부된다.
