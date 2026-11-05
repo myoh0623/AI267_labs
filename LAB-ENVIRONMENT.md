@@ -8,9 +8,13 @@
 oc login https://api.<cluster>:6443
 
 bash install-ai267.sh
-ai267 01
-ai267 status 01
+ai267 start 01
+# 웹 문제의 요구 사항 수행
+ai267 inspect 01
+ai267 finish 01
 ```
+
+`finish`는 만점일 때만 리소스를 자동 정리한다. 부분 점수나 실패가 있으면 수정과 재채점을 위해 리소스를 보존한다.
 
 단축 명령을 설치하지 않는 경우에만 아래 원본 명령을 사용한다.
 
