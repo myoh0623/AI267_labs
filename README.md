@@ -15,14 +15,14 @@ cd AI267_labs
 ```bash
 bash install-ai267.sh
 
-# 이후 어느 디렉터리에서든 짧게 실행
-ai267 04
-ai267 status 04
-ai267 exam 04
-ai267 grade 04
+# 이후 문제마다 세 명령만 사용
+ai267 start 04
+# 웹 문제의 지침대로 수행
+ai267 inspect 04
+ai267 finish 04
 ```
 
-`ai267 04`는 기존 교재 Lab을 정리하고 Task 04에 필요한 교재 Lab 하나만 실행한다. `KUBECONFIG=$HOME/.auth/lab-kubeconfig`와 설치 경로는 자동으로 적용된다.
+`start`는 기존 교재 Lab 정리, 필요한 Lab 실행, 시험 namespace 준비와 초기 상태 확인을 한 번에 처리한다. `finish`는 채점에 통과하면 시험·교재 리소스를 정리하고, 실패하면 수정할 수 있도록 그대로 보존한다. `KUBECONFIG=$HOME/.auth/lab-kubeconfig`와 설치 경로는 자동으로 적용된다.
 
 전체 원본 명령이 필요한 경우:
 
