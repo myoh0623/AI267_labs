@@ -13,6 +13,20 @@ cd AI267_labs
 ## 빠른 시작
 
 ```bash
+bash install-ai267.sh
+
+# 이후 어느 디렉터리에서든 짧게 실행
+ai267 04
+ai267 status 04
+ai267 exam 04
+ai267 grade 04
+```
+
+`ai267 04`는 기존 교재 Lab을 정리하고 Task 04에 필요한 교재 Lab 하나만 실행한다. `KUBECONFIG=$HOME/.auth/lab-kubeconfig`와 설치 경로는 자동으로 적용된다.
+
+전체 원본 명령이 필요한 경우:
+
+```bash
 oc login https://api.<cluster>:6443
 cd AI267_labs
 
