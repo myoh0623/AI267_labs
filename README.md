@@ -2,11 +2,19 @@
 
 웹 모의시험의 10개 과제를 실제 OpenShift/OpenShift AI 리소스로 연습하기 위한 문제별 실습 묶음이다. `ai267/v3.3/labs`의 검증된 리소스 형태를 참고했지만, 강의 시연과 달리 초기 상태를 일부러 미완성으로 만들고 응시자가 수정한 결과를 자동 채점한다.
 
+- GitHub: https://github.com/myoh0623/AI267_labs
+
+```bash
+git clone https://github.com/myoh0623/AI267_labs.git
+cd AI267_labs
+./exam-lab.sh validate
+```
+
 ## 빠른 시작
 
 ```bash
 oc login https://api.<cluster>:6443
-cd /home/omy-agent/redhat/openshift/exam/EX267/v3.3/practice-lab
+cd AI267_labs
 
 ./exam-lab.sh list
 ./exam-lab.sh preflight-all
