@@ -75,6 +75,12 @@ run_chapter() {
   fi
 
   lab_log "${chapter}: ${action} (시험 문제/namespace에는 변경 없음)"
+  if [[ "${chapter}" == chapter-02-workbench && "${action}" == prepare ]] \
+    && ! oc whoami -t >/dev/null 2>&1; then
+    lab_log "인증서 kubeconfig 감지: Workbench OAuth URL 검사 대신 Pod Ready를 검증합니다."
+    bash "${LAB_ROOT}/scripts/prepare-chapter02-cert-auth.sh" "${chapter_dir}"
+    return
+  fi
   if [[ "${action}" == cleanup ]]; then
     "${chapter_dir}/${script}" --yes
   else
