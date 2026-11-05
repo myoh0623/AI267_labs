@@ -84,6 +84,8 @@ cd AI267_labs
 
 각 문제의 정확한 리소스 이름과 evidence key는 `tasks/<문제>/README.md`에 있다.
 
+실제 클러스터에서 수행한 시작·실패 보존·만점 채점·자동 정리 결과와 환경 제약은 [VERIFICATION.md](VERIFICATION.md)에 기록되어 있다.
+
 ## 로컬 정적 검증
 
 클러스터 로그인 없이 스크립트 문법, Python 채점기, YAML 구조를 검사할 수 있다.
