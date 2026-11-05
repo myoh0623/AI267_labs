@@ -22,7 +22,7 @@ ai267 inspect 04
 ai267 finish 04
 ```
 
-`start`는 기존 교재 Lab 정리, 필요한 Lab 실행, 시험 namespace 준비와 초기 상태 확인을 한 번에 처리한다. `finish`는 채점에 통과하면 시험·교재 리소스를 정리하고, 실패하면 수정할 수 있도록 그대로 보존한다. `KUBECONFIG=$HOME/.auth/lab-kubeconfig`와 설치 경로는 자동으로 적용된다.
+`start`는 기존 교재 Lab 정리, 필요한 Lab 실행, 시험 namespace 준비와 초기 상태 확인을 한 번에 처리한다. MinIO가 필요한 문제는 클러스터의 자격 증명을 자동으로 읽으므로 별도 입력 프롬프트가 없다. Task 01·03·04에는 전용 bucket과 `exam-provided-minio` Secret이 시험 제공값으로 생성되지만, 채점 대상 S3 Secret은 일부러 미완성으로 남겨 응시자가 직접 구성한다. `finish`는 채점에 통과하면 시험·교재 리소스를 정리하고, 실패하면 수정할 수 있도록 그대로 보존한다. `KUBECONFIG=$HOME/.auth/lab-kubeconfig`와 설치 경로는 자동으로 적용된다.
 
 전체 원본 명령이 필요한 경우:
 
@@ -54,7 +54,7 @@ cd AI267_labs
 ./exam-lab.sh cleanup 01 --yes
 ```
 
-`lab-env`는 문제를 바꾸거나 정답을 적용하지 않는다. 교재의 정상 예제를 별도 `ai267-chXX-*` namespace에 한 번에 하나만 준비하고, 시험은 기존 `ex267-*` namespace에서 그대로 진행한다. 다음 문제로 이동할 때는 `lab-env switch <task>`를 사용한다. 필요한 문제와 Chapter 연결, MinIO 자격 증명 입력 방법은 [LAB-ENVIRONMENT.md](LAB-ENVIRONMENT.md)를 참고한다.
+`lab-env`는 문제를 바꾸거나 정답을 적용하지 않는다. 교재의 정상 예제를 별도 `ai267-chXX-*` namespace에 한 번에 하나만 준비하고, 시험은 기존 `ex267-*` namespace에서 그대로 진행한다. 다음 문제로 이동할 때는 `lab-env switch <task>`를 사용한다. 필요한 문제와 Chapter 연결, 자동으로 제공되는 입력값은 [LAB-ENVIRONMENT.md](LAB-ENVIRONMENT.md)를 참고한다.
 
 `grade`는 부분 점수를 보여주며, 모든 항목을 통과하지 못하면 종료 코드 1을 반환한다. 자동화에서 결과만 필요하면 `--json`을 추가한다.
 
@@ -77,7 +77,7 @@ cd AI267_labs
 
 - `prepare`는 프로젝트와 입력 계약만 생성하며 정답 리소스를 완성하지 않는다.
 - 고급 CRD, GPU, object storage, Model Registry endpoint는 클러스터마다 다르므로 `preflight`가 설치 여부를 먼저 보여준다.
-- 외부 자격 증명은 Git에 저장하지 않는다. S3/Registry 값은 Console에서 Secret에 입력한다.
+- 외부 자격 증명은 Git에 저장하지 않는다. 실습 클러스터의 MinIO 값은 실행 중에만 읽어 문제 namespace의 `exam-provided-minio`로 제공하며, 응시자가 이를 채점 대상 Secret에 적용한다.
 - 일부 외부 시스템 결과는 정해진 이름의 `*-evidence` ConfigMap에 digest·ID·HTTP 상태만 기록한다. 실제 Secret이나 원문 데이터는 기록하지 않는다.
 - `cleanup`은 `ex267.practice/managed=true`와 해당 문제 번호 라벨이 모두 일치하는 프로젝트만 삭제한다.
 - Task 09의 소형 mock 애플리케이션은 원격 AI267 자료에 Chapter 09가 없을 때 `vendor/` 복사본을 사용한다.
