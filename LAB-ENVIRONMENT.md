@@ -7,6 +7,15 @@
 ```bash
 oc login https://api.<cluster>:6443
 
+bash install-ai267.sh
+ai267 01
+ai267 status 01
+```
+
+단축 명령을 설치하지 않는 경우에만 아래 원본 명령을 사용한다.
+
+```bash
+
 ./exam-lab.sh lab-env list
 ./exam-lab.sh lab-env switch 01
 ./exam-lab.sh preflight-all
