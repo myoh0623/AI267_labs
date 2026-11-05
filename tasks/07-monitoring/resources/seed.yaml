@@ -1,0 +1,49 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: ex267-t07-monitoring
+  labels:
+    ex267.practice/managed: "true"
+    ex267.practice/task: "07"
+    opendatahub.io/dashboard: "true"
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: trustyai-storage
+  namespace: ex267-t07-monitoring
+spec:
+  accessModes: [ReadWriteOnce]
+  resources:
+    requests:
+      storage: 1Gi
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: monitoring-evidence
+  namespace: ex267-t07-monitoring
+data:
+  model_identifier: TODO
+  capture_test_sha256: TODO
+  protected_attribute: TODO
+  favorable_outcome: TODO
+  comparison_groups: TODO
+  fairness_threshold: TODO
+  window: TODO
+  minimum_samples: TODO
+  reference_dataset_digest: TODO
+  current_window: TODO
+  drift_metric: TODO
+  drift_result: TODO
+  request_latency_panel: TODO
+  request_error_panel: TODO
+  cpu_memory_panel: TODO
+  accelerator_panel: TODO
+  correlation_window: TODO
+  signal_owner: TODO
+  rollback_condition: TODO
+  redaction_policy: TODO
+  retention_policy: TODO
+  access_policy: TODO
+

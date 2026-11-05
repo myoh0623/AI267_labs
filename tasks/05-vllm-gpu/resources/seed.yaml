@@ -1,0 +1,61 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: ex267-t05-vllm
+  labels:
+    ex267.practice/managed: "true"
+    ex267.practice/task: "05"
+    opendatahub.io/dashboard: "true"
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: support-llm
+  namespace: ex267-t05-vllm
+  labels:
+    app: support-llm
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: support-llm
+  template:
+    metadata:
+      labels:
+        app: support-llm
+    spec:
+      nodeSelector:
+        accelerator: intentionally-wrong
+      containers:
+        - name: vllm
+          image: registry.access.redhat.com/ubi9/ubi-minimal:9.6
+          command: [sleep, infinity]
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 256Mi
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: vllm-evidence
+  namespace: ex267-t05-vllm
+data:
+  pending_event: TODO
+  root_cause: TODO
+  quota_checked: TODO
+  volume_topology_checked: TODO
+  model_revision: TODO
+  stream_http: TODO
+  stream_transcript_sha256: TODO
+  concurrency: TODO
+  p95_latency_ms: TODO
+  tokens_per_second: TODO
+  gpu_memory_mib: TODO
+  gpu_utilization_pct: TODO
+  queue_depth: TODO
+  error_rate: TODO
+

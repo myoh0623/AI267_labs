@@ -1,0 +1,67 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: ex267-fraud
+  labels:
+    ex267.practice/managed: "true"
+    ex267.practice/task: "01"
+    opendatahub.io/dashboard: "true"
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: developer1-incomplete
+  namespace: ex267-fraud
+subjects:
+  - kind: User
+    apiGroup: rbac.authorization.k8s.io
+    name: developer1
+roleRef:
+  kind: ClusterRole
+  apiGroup: rbac.authorization.k8s.io
+  name: view
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: fraud-s3
+  namespace: ex267-fraud
+  labels:
+    opendatahub.io/dashboard: "true"
+  annotations:
+    openshift.io/display-name: fraud-s3
+    opendatahub.io/connection-type-ref: s3
+type: Opaque
+stringData:
+  AWS_ACCESS_KEY_ID: REPLACE_ME
+  AWS_SECRET_ACCESS_KEY: REPLACE_ME
+  AWS_S3_ENDPOINT: REPLACE_ME
+  AWS_S3_BUCKET: REPLACE_ME
+  AWS_DEFAULT_REGION: us-east-1
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: fraud-input-contract
+  namespace: ex267-fraud
+data:
+  input_key: input/transactions.csv
+  expected_columns: transaction_id,amount,country,label
+  transactions.csv: |-
+    transaction_id,amount,country,label
+    tx-001,12.50,KR,0
+    tx-002,900.00,US,1
+    tx-003,42.10,DE,0
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: fraud-s3-evidence
+  namespace: ex267-fraud
+data:
+  input_key: TODO
+  output_key: TODO
+  input_sha256: TODO
+  output_sha256: TODO
+  verified_from_new_process: "false"
+

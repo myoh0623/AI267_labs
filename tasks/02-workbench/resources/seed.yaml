@@ -1,0 +1,51 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: ex267-t02-workbench
+  labels:
+    ex267.practice/managed: "true"
+    ex267.practice/task: "02"
+    opendatahub.io/dashboard: "true"
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: risk-lab-storage
+  namespace: ex267-t02-workbench
+spec:
+  accessModes: [ReadWriteOnce]
+  resources:
+    requests:
+      storage: 10Gi
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: risk-lab
+  namespace: ex267-t02-workbench
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: workbench-contract
+  namespace: ex267-t02-workbench
+data:
+  workbench_name: risk-lab
+  approved_image: registry.redhat.io/rhoai/odh-workbench-jupyter-minimal-cpu-py312-rhel9@sha256:44c8c2789b1773d6a66d68eac85262ac173989f99ae5bc0ea8c192bd1504d3f2
+  mount_path: /opt/app-root/src
+  storage: 10Gi
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: workbench-evidence
+  namespace: ex267-t02-workbench
+data:
+  git_revision: TODO
+  data_version: TODO
+  seed: TODO
+  image_digest: TODO
+  artifact_uri: TODO
+  tensorboard_runs: "0"
+  restart_proof: "false"
+

@@ -1,0 +1,155 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mock-llm
+  namespace: ex267-t09-rag
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {app: mock-llm}
+  template:
+    metadata:
+      labels: {app: mock-llm}
+    spec:
+      containers:
+        - name: server
+          image: registry.access.redhat.com/ubi9/python-312:9.6
+          command: [python, /app/mock_llm.py]
+          ports: [{name: http, containerPort: 8080}]
+          readinessProbe:
+            httpGet: {path: /healthz, port: http}
+            periodSeconds: 5
+          resources:
+            requests: {cpu: 50m, memory: 128Mi}
+            limits: {cpu: 500m, memory: 256Mi}
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities: {drop: [ALL]}
+            runAsNonRoot: true
+          volumeMounts:
+            - {name: code, mountPath: /app, readOnly: true}
+      volumes:
+        - name: code
+          configMap: {name: mock-llm-code}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: mock-llm
+  namespace: ex267-t09-rag
+spec:
+  selector: {app: mock-llm}
+  ports: [{name: http, port: 8080, targetPort: http}]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: todo-tool
+  namespace: ex267-t09-rag
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {app: todo-tool}
+  template:
+    metadata:
+      labels: {app: todo-tool}
+    spec:
+      containers:
+        - name: server
+          image: registry.access.redhat.com/ubi9/python-312:9.6
+          command: [python, /app/tool_service.py]
+          env:
+            - name: TOOL_TOKEN
+              valueFrom:
+                secretKeyRef: {name: tool-identity, key: token}
+          ports: [{name: http, containerPort: 8080}]
+          readinessProbe:
+            httpGet: {path: /healthz, port: http}
+            periodSeconds: 5
+          resources:
+            requests: {cpu: 50m, memory: 128Mi}
+            limits: {cpu: 500m, memory: 256Mi}
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities: {drop: [ALL]}
+            runAsNonRoot: true
+          volumeMounts:
+            - {name: code, mountPath: /app, readOnly: true}
+      volumes:
+        - name: code
+          configMap: {name: tool-service-code}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: todo-tool
+  namespace: ex267-t09-rag
+spec:
+  selector: {app: todo-tool}
+  ports: [{name: http, port: 8080, targetPort: http}]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: genai-app
+  namespace: ex267-t09-rag
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {app: genai-app}
+  template:
+    metadata:
+      labels: {app: genai-app}
+    spec:
+      serviceAccountName: rag-app
+      containers:
+        - name: app
+          image: registry.access.redhat.com/ubi9/python-312:9.6
+          command: [python, /app/genai_app.py]
+          env:
+            - {name: LLM_URL, value: http://mock-llm:8080}
+            - {name: TOOL_URL, value: http://todo-tool:8080}
+            - name: TOOL_TOKEN
+              valueFrom:
+                secretKeyRef: {name: tool-identity, key: token}
+          ports: [{name: http, containerPort: 8080}]
+          readinessProbe:
+            httpGet: {path: /healthz, port: http}
+            periodSeconds: 5
+          resources:
+            requests: {cpu: 50m, memory: 128Mi}
+            limits: {cpu: 500m, memory: 256Mi}
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities: {drop: [ALL]}
+            runAsNonRoot: true
+          volumeMounts:
+            - {name: code, mountPath: /app, readOnly: true}
+            - {name: documents, mountPath: /docs, readOnly: true}
+      volumes:
+        - name: code
+          configMap: {name: genai-app-code}
+        - name: documents
+          configMap: {name: rag-documents}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: genai-app
+  namespace: ex267-t09-rag
+spec:
+  selector: {app: genai-app}
+  ports: [{name: http, port: 8080, targetPort: http}]
+---
+apiVersion: route.openshift.io/v1
+kind: Route
+metadata:
+  name: genai-app
+  namespace: ex267-t09-rag
+spec:
+  to: {kind: Service, name: genai-app}
+  port: {targetPort: http}
+  tls:
+    termination: edge
+    insecureEdgeTerminationPolicy: Redirect
+

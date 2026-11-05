@@ -1,0 +1,20 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: clean-replay
+  namespace: ex267-t10-evidence
+spec:
+  backoffLimit: 1
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: replay
+          image: REPLACE_WITH_PINNED_IMAGE_DIGEST
+          command: [/bin/sh, -c]
+          args:
+            - REPLACE_WITH_CLEAN_REPLAY_COMMAND
+          resources:
+            requests: {cpu: 100m, memory: 128Mi}
+            limits: {cpu: "1", memory: 1Gi}
+

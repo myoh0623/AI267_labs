@@ -1,0 +1,31 @@
+apiVersion: trustyai.opendatahub.io/v1alpha1
+kind: LMEvalJob
+metadata:
+  name: REPLACE_WITH_BASELINE_OR_OPTIMIZED_NAME
+  namespace: ex267-t08-evaluation
+spec:
+  model: local-completions
+  modelArgs:
+    - name: model
+      value: REPLACE_WITH_SERVED_MODEL
+    - name: base_url
+      value: https://REPLACE_WITH_MODEL_ROUTE/v1/completions
+    - name: num_concurrent
+      value: "1"
+    - name: max_retries
+      value: "3"
+    - name: tokenizer
+      value: REPLACE_WITH_APPROVED_TOKENIZER
+    - name: verify_certificate
+      value: "True"
+  taskList:
+    taskNames: [openbookqa]
+  allowOnline: false
+  allowCodeExecution: false
+  batchSize: "1"
+  limit: "10"
+  logSamples: true
+  outputs:
+    pvcManaged:
+      size: 100Mi
+
