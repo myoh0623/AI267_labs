@@ -2,6 +2,8 @@
 
 모델 계약과 S3 Secret skeleton만 제공된다. `fraud-v2` InferenceService는 응시자가 만든다.
 
+`ai267 start 04`는 `ex267-t04-serving/exam-provided-minio`에 endpoint, 전용 bucket과 자격 증명을 시험 제공값으로 준비한다. OpenShift Console의 **Workloads → Secrets → exam-provided-minio**에서 값을 확인해 채점 대상 `fraud-s3`와 모델 저장 경로에 적용한다. 대상 Secret과 InferenceService starter는 계속 미완성 상태로 제공된다.
+
 ## 수행 목표
 
 1. `models/fraud/2/`의 ONNX checksum을 확인하고 S3 connection을 완성한다.
