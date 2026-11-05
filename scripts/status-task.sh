@@ -8,7 +8,15 @@ task=$1
 namespace=$(lab_task_namespace "${task}")
 lab_require_login
 
-oc get namespace "${namespace}" >/dev/null 2>&1 || lab_die "Task ${task} is not prepared."
+namespace_ready=false
+for _ in 1 2 3 4 5; do
+  if oc get namespace "${namespace}" >/dev/null 2>&1; then
+    namespace_ready=true
+    break
+  fi
+  sleep 2
+done
+[[ "${namespace_ready}" == true ]] || lab_die "Task ${task} is not prepared."
 printf 'Task %s · namespace %s\n\n' "${task}" "${namespace}"
 oc get all,pvc,configmap,secret,serviceaccount,rolebinding,networkpolicy -n "${namespace}" 2>/dev/null || true
 
@@ -21,4 +29,6 @@ for resource in \
   lmevaljobs.trustyai.opendatahub.io; do
   oc get "${resource}" -n "${namespace}" 2>/dev/null || true
 done
+
+oc get servingruntimes.serving.kserve.io -n "${namespace}" 2>/dev/null || true
 

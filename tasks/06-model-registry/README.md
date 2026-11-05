@@ -2,6 +2,8 @@
 
 Model Registry는 클러스터 밖의 metadata API를 포함하므로 결과 ID와 digest를 `registry-evidence`에 저장한다.
 
+`ai267 start 06`은 교재의 `serving-modelregistry` Lab을 시작한다. 이 Lab이 RHOAI Model Registry component, MariaDB, `redhattraining-model-registry`, 교실 OCI registry와 ONNX v1/v2 파일을 준비한다. 위치는 `exam-provided-registry-inputs`에 기록되며, `fraud-risk` 등록과 두 버전의 build/push/배포는 응시자가 수행한다.
+
 ## 수행 목표
 
 1. `fraud-risk` 아래 1.0.0과 1.1.0을 서로 다른 version ID로 등록한다.

@@ -30,6 +30,29 @@ chapters_for_task() {
   esac
 }
 
+course_lab_for_task() {
+  case "$1" in
+    06) printf '%s\n' serving-modelregistry ;;
+  esac
+}
+
+course_lab_is_started() {
+  local course_lab=$1
+  command -v lab >/dev/null 2>&1 || return 1
+  lab status "${course_lab}" 2>/dev/null | grep -q 'Status: Started'
+}
+
+cleanup_active_course_labs() {
+  local keep=${1:-} course_lab
+  for course_lab in serving-modelregistry; do
+    [[ "${course_lab}" == "${keep}" ]] && continue
+    if course_lab_is_started "${course_lab}"; then
+      lab_log "활성 교재 Lab 정리: ${course_lab}"
+      (cd "${HOME}" && lab finish "${course_lab}")
+    fi
+  done
+}
+
 all_chapters() {
   printf '%s\n' \
     chapter-02-workbench \
@@ -49,7 +72,7 @@ list_mapping() {
 03  Chapter 06                 DSPA·KFP v2 기준 환경
 04  Chapter 04                 KServe V2·ModelCar 기준 환경
 05  -                          물리 GPU 필요; 기존 Pending 진단 환경 유지
-06  -                          Model Registry가 Removed; 기존 증적 계약 유지
+06  serving-modelregistry      Model Registry·MariaDB·ONNX v1/v2·교실 OCI registry
 07  Chapter 05                 TrustyAI capture·drift 기준 환경
 08  Chapter 08                 CPU 양자화·LMEvalJob 스키마 기준 환경
 09  Chapter 09                 mock LLM·RAG·guardrail 기준 환경
@@ -145,8 +168,16 @@ lab_require_login
 if [[ "${action}" == switch ]]; then
   task=$(lab_normalize_task "${target}") || { usage; exit 2; }
   mapfile -t chapters < <(chapters_for_task "${task}")
+  course_lab=$(course_lab_for_task "${task}" || true)
   cleanup_active_chapters
-  if (( ${#chapters[@]} == 0 )); then
+  cleanup_active_course_labs "${course_lab}"
+  if [[ -n "${course_lab}" ]] && ! course_lab_is_started "${course_lab}"; then
+    command -v lab >/dev/null 2>&1 \
+      || lab_die "교재 Lab 명령을 찾을 수 없습니다: lab start ${course_lab}"
+    lab_log "${course_lab}: start (시험 문제/namespace에는 변경 없음)"
+    (cd "${HOME}" && lab start "${course_lab}")
+  fi
+  if (( ${#chapters[@]} == 0 )) && [[ -z "${course_lab}" ]]; then
     lab_log "Task ${task}에는 별도 교재 Lab 기준 환경이 필요하지 않습니다."
     exit 0
   fi
@@ -161,10 +192,33 @@ if [[ "${target}" == all ]]; then
 else
   task=$(lab_normalize_task "${target}") || { usage; exit 2; }
   mapfile -t chapters < <(chapters_for_task "${task}")
+  course_lab=$(course_lab_for_task "${task}" || true)
+  if [[ -n "${course_lab}" ]]; then
+    case "${action}" in
+      status) (cd "${HOME}" && lab status "${course_lab}") ;;
+      cleanup)
+        if course_lab_is_started "${course_lab}"; then
+          (cd "${HOME}" && lab finish "${course_lab}")
+        else
+          lab_log "${course_lab} 교재 Lab은 실행 중이 아닙니다."
+        fi
+        ;;
+      prepare)
+        if ! course_lab_is_started "${course_lab}"; then
+          (cd "${HOME}" && lab start "${course_lab}")
+        fi
+        ;;
+    esac
+    exit 0
+  fi
   if (( ${#chapters[@]} == 0 )); then
     lab_log "Task ${task}에는 별도 교재 Lab 기준 환경이 필요하지 않습니다. 기존 시험 환경을 사용하세요."
     exit 0
   fi
+fi
+
+if [[ "${target}" == all && "${action}" == cleanup ]]; then
+  cleanup_active_course_labs
 fi
 
 if [[ "${action}" == prepare ]]; then

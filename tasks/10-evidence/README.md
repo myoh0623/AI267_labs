@@ -2,6 +2,8 @@
 
 통합 evidence와 rollback ConfigMap skeleton이 제공된다.
 
+시작 시 합성 current/previous model, sample, environment lock과 clean replay Python 코드가 `exam-provided-replay-inputs`와 `s3://ex267-task10/replay/`에 준비된다. 고정 image 값도 입력으로 제공되지만 Job의 volume, command, 계보 manifest와 rollback 증적은 응시자가 완성한다.
+
 ## 수행 목표
 
 1. clean Git SHA, environment/pipeline digest, secret scan 결과를 기록한다.

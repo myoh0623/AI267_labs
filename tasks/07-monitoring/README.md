@@ -2,6 +2,8 @@
 
 1Gi PVC와 monitoring evidence 계약이 제공된다.
 
+시작 시 교재 Chapter 05와 동일한 `iris-monitor` 기준 모델, `monitoring-mlserver`, 테스트 클라이언트와 `exam-provided-trustyai-reference`가 시험 namespace에 입력으로 준비된다. TrustyAIService 적용, capture 요청, drift/fairness 정의와 증적은 자동으로 채우지 않는다.
+
 ## 수행 목표
 
 1. `resources/trustyai-starter.yaml`을 환경에 맞게 적용하고 capture path를 실제 요청으로 검증한다.

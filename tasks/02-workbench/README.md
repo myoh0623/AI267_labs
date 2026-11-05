@@ -2,6 +2,8 @@
 
 `risk-lab-storage` 10Gi PVC와 승인 image digest 계약만 제공된다. OpenShift AI Console에서 `risk-lab` Workbench를 완성한다.
 
+`exam-provided-workbench-inputs` ConfigMap의 `create_experiment_runs.py`는 합성 데이터로 두 TensorBoard run을 만드는 입력 코드다. Workbench와 PVC를 직접 만든 뒤 필요할 때 복사해 실행한다.
+
 ## 수행 목표
 
 1. `workbench-contract`의 digest 이미지를 사용하는 `risk-lab` Notebook을 만든다.

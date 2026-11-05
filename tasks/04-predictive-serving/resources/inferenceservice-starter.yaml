@@ -7,6 +7,8 @@ metadata:
     opendatahub.io/dashboard: "true"
   annotations:
     serving.kserve.io/deploymentMode: RawDeployment
+    opendatahub.io/connections: fraud-s3
+    opendatahub.io/connection-path: models/fraud/2/
     ex267.io/model-sha256: REPLACE_ME
 spec:
   predictor:
@@ -16,7 +18,6 @@ spec:
         name: onnx
         version: "1"
       runtime: REPLACE_WITH_OPENVINO_RUNTIME
-      storageUri: s3://REPLACE_ME/models/fraud/2/
       resources:
         requests:
           cpu: REPLACE_ME

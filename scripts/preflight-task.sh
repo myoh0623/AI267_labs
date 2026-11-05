@@ -31,7 +31,11 @@ case "${task}" in
     fi
     ;;
   04|05) check_api serving.kserve.io inferenceservices 'KServe InferenceService CRD' ;;
-  06) printf '%-32s %s\n' 'Model Registry endpoint' '환경별 값 필요' ;;
+  06)
+    check_api modelregistry.opendatahub.io modelregistries 'Model Registry CRD'
+    registry_state=$(oc get datasciencecluster -o jsonpath='{.items[0].status.components.modelregistry.managementState}' 2>/dev/null || true)
+    printf '%-32s %s\n' 'Model Registry component' "${registry_state:-UNKNOWN}"
+    ;;
   07) check_api trustyai.opendatahub.io trustyaiservices 'TrustyAIService CRD' ;;
   08) check_api trustyai.opendatahub.io lmevaljobs 'LMEvalJob CRD' ;;
   09) printf '%-32s %s\n' 'AI267 reference app' "${AI267_V33_ROOT:-${AI267_V33_ROOT_DEFAULT}}/labs/chapter-09-genai-patterns/app" ;;

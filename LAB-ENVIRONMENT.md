@@ -35,14 +35,14 @@ ai267 finish 01
 ./exam-lab.sh grade 04
 ```
 
-Task 01·02·03의 교재 환경과 Task 04의 모델 저장소 연습은 MinIO를 사용한다. `ai267 start`가 `minio/minio-secret`에서 자격 증명을 자동으로 읽으므로 사용자가 access key나 secret key를 입력할 필요가 없다. 값은 저장소나 터미널 출력에 기록되지 않는다.
+Task 01·02·03의 교재 환경, Task 04의 모델 저장소, Task 08의 offline LM-Eval cache와 Task 10의 replay artifact는 MinIO를 사용한다. `ai267 start`가 `minio/minio-secret`에서 자격 증명을 자동으로 읽으므로 사용자가 access key나 secret key를 입력할 필요가 없다. 값은 저장소나 터미널 출력에 기록되지 않는다.
 
 ```bash
 ai267 start 01
 # Console: Workloads -> Secrets -> exam-provided-minio
 ```
 
-Task 01·03·04에는 문제 전용 bucket과 `exam-provided-minio`가 자동 생성된다. 이 Secret은 시험지에서 제공하는 endpoint, bucket, access key, secret key에 해당하는 **입력 자료**다. 채점 대상인 `fraud-s3` 또는 `aws-connection-fraud-s3`는 `REPLACE_ME` 상태로 유지되며, 응시자가 Console에서 제공값을 적용하고 올바른 annotation·리소스 설정을 완성해야 한다.
+Task 01·03·04·08·10에는 문제 전용 bucket과 `exam-provided-minio`가 자동 생성된다. 이 Secret은 시험지에서 제공하는 endpoint, bucket, access key, secret key에 해당하는 **입력 자료**다. 채점 대상인 `fraud-s3` 또는 `aws-connection-fraud-s3`는 `REPLACE_ME` 상태로 유지되며, 응시자가 Console에서 제공값을 적용하고 올바른 annotation·리소스 설정을 완성해야 한다.
 
 ## 문제별 연결
 
@@ -51,11 +51,14 @@ Task 01·03·04에는 문제 전용 bucket과 `exam-provided-minio`가 자동 �
 | 01·02 | Chapter 02 | S3 connection, Workbench, PVC, custom image의 정상 예시 |
 | 03 | Chapter 06 | DSPA, KFP v2, object storage의 정상 예시 |
 | 04 | Chapter 04 | KServe V2 inference와 OCI ModelCar의 정상 예시 |
+| 06 | `serving-modelregistry` | Registry component, MariaDB, ONNX v1/v2와 OCI registry |
 | 07 | Chapter 05 | TrustyAI capture, reference data, drift request의 정상 예시 |
 | 08 | Chapter 08 | CPU 양자화 결과와 LMEvalJob server-side schema 검증 |
 | 09 | Chapter 09 | mock LLM, RAG, read-only tool, guardrail의 정상 예시 |
 
-Task 05는 물리 GPU가 필요하므로 교재 환경으로 GPU를 대신 만들지 않는다. Task 06은 현재 클러스터의 Model Registry가 `Removed`이므로 기존 metadata·계보·배포 연결 증적 계약을 유지한다. Task 10은 앞선 문제의 결과를 연결하는 통합 과제라 별도 기준 환경을 만들지 않는다.
+Task 05는 물리 GPU가 필요하므로 교재 환경으로 GPU를 대신 만들지 않는다. Task 06은 `lab start serving-modelregistry`를 사용해 현재 클러스터에서 비활성화된 component를 교재 기준으로 활성화한다. Task 10은 앞선 문제의 결과를 연결하는 통합 과제라 별도 교재 Lab 대신 합성 replay artifact를 제공한다.
+
+Task 06에서 사용한 교재 Lab은 다른 문제로 전환하거나 `ai267 finish 06`을 실행할 때 `lab finish serving-modelregistry`로 정리된다. Task 08은 클러스터 online 정책을 바꾸지 않고 MinIO의 고정 offline cache를 사용한다.
 
 ## 상태 확인과 정리
 

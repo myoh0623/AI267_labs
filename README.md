@@ -22,7 +22,7 @@ ai267 inspect 04
 ai267 finish 04
 ```
 
-`start`는 기존 교재 Lab 정리, 필요한 Lab 실행, 시험 namespace 준비와 초기 상태 확인을 한 번에 처리한다. MinIO가 필요한 문제는 클러스터의 자격 증명을 자동으로 읽으므로 별도 입력 프롬프트가 없다. Task 01·03·04에는 전용 bucket과 `exam-provided-minio` Secret이 시험 제공값으로 생성되지만, 채점 대상 S3 Secret은 일부러 미완성으로 남겨 응시자가 직접 구성한다. `finish`는 채점에 통과하면 시험·교재 리소스를 정리하고, 실패하면 수정할 수 있도록 그대로 보존한다. `KUBECONFIG=$HOME/.auth/lab-kubeconfig`와 설치 경로는 자동으로 적용된다.
+`start`는 기존 교재 Lab 정리, 필요한 Lab 실행, 시험 namespace 준비, 합성 데이터·입력 코드·기준 런타임 제공과 초기 상태 확인을 한 번에 처리한다. MinIO가 필요한 문제는 클러스터의 자격 증명을 자동으로 읽으므로 별도 입력 프롬프트가 없다. Task 01·03·04·08·10에는 전용 bucket과 `exam-provided-minio` Secret이 시험 제공값으로 생성되지만, 채점 대상 S3 Secret과 답안 리소스는 일부러 미완성으로 남겨 응시자가 직접 구성한다. `finish`는 채점에 통과하면 시험·교재 리소스를 정리하고, 실패하면 수정할 수 있도록 그대로 보존한다. `KUBECONFIG=$HOME/.auth/lab-kubeconfig`와 설치 경로는 자동으로 적용된다.
 
 전체 원본 명령이 필요한 경우:
 
@@ -75,12 +75,30 @@ cd AI267_labs
 
 ## 설계 원칙
 
-- `prepare`는 프로젝트와 입력 계약만 생성하며 정답 리소스를 완성하지 않는다.
-- 고급 CRD, GPU, object storage, Model Registry endpoint는 클러스터마다 다르므로 `preflight`가 설치 여부를 먼저 보여준다.
+- `prepare`는 프로젝트와 입력 계약만 생성하며 정답 리소스를 완성하지 않는다. `ai267 start`가 별도 `exam-provided-*` 리소스로 합성 데이터, 코드, 모델과 기준 서비스를 추가한다.
+- 고급 CRD, GPU와 object storage는 클러스터마다 다르므로 `preflight`가 설치 여부를 먼저 보여준다. Task 06은 교재 `serving-modelregistry` Lab을 시작해 Registry 선행 환경을 구성한다.
 - 외부 자격 증명은 Git에 저장하지 않는다. 실습 클러스터의 MinIO 값은 실행 중에만 읽어 문제 namespace의 `exam-provided-minio`로 제공하며, 응시자가 이를 채점 대상 Secret에 적용한다.
 - 일부 외부 시스템 결과는 정해진 이름의 `*-evidence` ConfigMap에 digest·ID·HTTP 상태만 기록한다. 실제 Secret이나 원문 데이터는 기록하지 않는다.
 - `cleanup`은 `ex267.practice/managed=true`와 해당 문제 번호 라벨이 모두 일치하는 프로젝트만 삭제한다.
 - Task 09의 소형 mock 애플리케이션은 원격 AI267 자료에 Chapter 09가 없을 때 `vendor/` 복사본을 사용한다.
+- 현재 클러스터에는 GPU node가 없으므로 Task 05의 실제 vLLM 처리량 측정만 완전 수행할 수 없다. 가짜 GPU를 만들지 않고 Pending·scheduler 진단을 연습한다.
+
+## 자동 제공되는 입력
+
+| Task | `ai267 start`가 준비하는 선행 입력 |
+| --- | --- |
+| 01 | MinIO bucket/credential, `developer1` identity 계약 |
+| 02 | TensorBoard run 생성용 합성 Python 코드 |
+| 03 | MinIO 합성 CSV, DSPA DB Secret, KFP v2 pipeline 소스 |
+| 04 | 교재 ONNX v2/v1, SHA-256, 공식 OpenVINO ServingRuntime |
+| 05 | 실제 GPU node 수와 실행 가능 여부 |
+| 06 | 교재 Model Registry/MariaDB/OCI registry/ONNX 자산 |
+| 07 | Iris 기준 모델, client, versioned reference dataset |
+| 08 | baseline/optimized mock completions Service, OpenBookQA/GPT-2 offline cache, 한국어·안전 Unitxt recipe |
+| 09 | mock RAG 앱과 source/revision/ACL 계약 |
+| 10 | current/previous model, sample, lock, replay 코드와 MinIO 사본 |
+
+`exam-provided-*`는 시험지에서 주어지는 입력 자료에 해당한다. 이를 읽고 채점 대상 리소스에 반영하는 과정은 응시자의 작업이다.
 
 각 문제의 정확한 리소스 이름과 evidence key는 `tasks/<문제>/README.md`에 있다.
 

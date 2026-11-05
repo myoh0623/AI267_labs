@@ -14,7 +14,11 @@ from pathlib import Path
 import sys
 
 root = Path(sys.argv[1])
-paths = [root / "scripts" / "grade.py", *sorted((root / "vendor").rglob("*.py"))]
+paths = [
+    root / "scripts" / "grade.py",
+    *sorted((root / "vendor").rglob("*.py")),
+    *sorted((root / "tasks").rglob("*.py")),
+]
 for path in paths:
     compile(path.read_text(encoding="utf-8"), str(path), "exec")
 print(f"[validate] parsed {len(paths)} Python files")
@@ -31,6 +35,8 @@ class EmptyOc:
     def get(self, *args, **kwargs):
         return None
     def list(self, *args, **kwargs):
+        return []
+    def list_all(self, *args, **kwargs):
         return []
 
 for task, (namespace, maximum, _) in module["TASKS"].items():

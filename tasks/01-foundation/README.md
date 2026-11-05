@@ -4,6 +4,8 @@
 
 `ai267 start 01`은 `ex267-fraud/exam-provided-minio`에 endpoint, 전용 bucket과 자격 증명을 시험 제공값으로 준비한다. OpenShift Console의 **Workloads → Secrets → exam-provided-minio**에서 값을 확인해 채점 대상 `fraud-s3`에 적용한다. `fraud-s3` 자체는 정답이 아니므로 `REPLACE_ME` 상태로 시작한다.
 
+`developer1`은 문제에 고정된 RBAC subject다. 교재가 제공하는 실제 로그인 계정은 `admin`과 `developer`뿐이므로 별도 사용자를 만들거나 로그인할 필요가 없다. 이 사실은 `exam-provided-identity` ConfigMap에도 기록된다.
+
 ## 수행 목표
 
 1. `ex267-fraud`에 `team=northstar-risk`, `environment=exam`을 설정한다.

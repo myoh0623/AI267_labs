@@ -1,0 +1,71 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: synthetic-baseline
+  namespace: ex267-t08-evaluation
+  labels: {app: synthetic-baseline, ex267.practice/input: "true"}
+spec:
+  replicas: 1
+  selector: {matchLabels: {app: synthetic-baseline}}
+  template:
+    metadata: {labels: {app: synthetic-baseline}}
+    spec:
+      containers:
+        - name: api
+          image: registry.access.redhat.com/ubi9/python-312:9.6
+          command: [python, /opt/ex267/mock_completion_api.py]
+          env:
+            - {name: MODEL_NAME, value: synthetic-baseline}
+            - {name: RESPONSE_DELAY, value: "0.05"}
+          ports: [{containerPort: 8080}]
+          resources:
+            requests: {cpu: 50m, memory: 64Mi}
+            limits: {cpu: 250m, memory: 256Mi}
+          volumeMounts: [{name: code, mountPath: /opt/ex267, readOnly: true}]
+      volumes: [{name: code, configMap: {name: exam-provided-completion-api}}]
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: synthetic-baseline
+  namespace: ex267-t08-evaluation
+  labels: {ex267.practice/input: "true"}
+spec:
+  selector: {app: synthetic-baseline}
+  ports: [{name: http, port: 8080, targetPort: 8080}]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: synthetic-optimized
+  namespace: ex267-t08-evaluation
+  labels: {app: synthetic-optimized, ex267.practice/input: "true"}
+spec:
+  replicas: 1
+  selector: {matchLabels: {app: synthetic-optimized}}
+  template:
+    metadata: {labels: {app: synthetic-optimized}}
+    spec:
+      containers:
+        - name: api
+          image: registry.access.redhat.com/ubi9/python-312:9.6
+          command: [python, /opt/ex267/mock_completion_api.py]
+          env:
+            - {name: MODEL_NAME, value: synthetic-optimized}
+            - {name: RESPONSE_DELAY, value: "0.01"}
+          ports: [{containerPort: 8080}]
+          resources:
+            requests: {cpu: 50m, memory: 64Mi}
+            limits: {cpu: 250m, memory: 256Mi}
+          volumeMounts: [{name: code, mountPath: /opt/ex267, readOnly: true}]
+      volumes: [{name: code, configMap: {name: exam-provided-completion-api}}]
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: synthetic-optimized
+  namespace: ex267-t08-evaluation
+  labels: {ex267.practice/input: "true"}
+spec:
+  selector: {app: synthetic-optimized}
+  ports: [{name: http, port: 8080, targetPort: 8080}]

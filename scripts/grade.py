@@ -75,6 +75,15 @@ class Oc:
         except json.JSONDecodeError:
             return []
 
+    def list_all(self, kind: str) -> list[dict[str, Any]]:
+        result = self.run("get", kind, "-A", "-o", "json")
+        if result.returncode != 0:
+            return []
+        try:
+            return json.loads(result.stdout).get("items", [])
+        except json.JSONDecodeError:
+            return []
+
 
 def dig(value: Any, *path: Any, default: Any = None) -> Any:
     current = value
@@ -246,8 +255,10 @@ def grade_04(oc: Oc, ns: str) -> list[Result]:
     service = oc.get("inferenceservice", "fraud-v2", ns)
     model = dig(service, "spec", "predictor", "model", default={}) or {}
     uri = model.get("storageUri", "")
+    connection_path = dig(service, "metadata", "annotations", "opendatahub.io/connection-path", default="") \
+        or dig(model, "storage", "path", default="")
     digest = dig(service, "metadata", "annotations", "ex267.io/model-sha256", default="")
-    r1 = "models/fraud/2" in uri and is_sha(digest)
+    r1 = ("models/fraud/2" in uri or "models/fraud/2" in connection_path) and is_sha(digest)
 
     runtime = str(model.get("runtime", "")).lower()
     model_format = str(dig(model, "modelFormat", "name", default="")).lower()
@@ -271,7 +282,7 @@ def grade_04(oc: Oc, ns: str) -> list[Result]:
         and is_sha(evidence.get("rollback_model_sha256"))
 
     return [
-        result("04-1", "models/fraud/2 immutable artifact", 6, r1, f"storageUri={uri or 'missing'}"),
+        result("04-1", "models/fraud/2 immutable artifact", 6, r1, f"storage={uri or connection_path or 'missing'}"),
         result("04-2", "OpenVINO runtime·model format", 6, r2, f"runtime={runtime}, format={model_format}"),
         result("04-3", "1 CPU·2Gi request/limit", 6, r3, json.dumps(resources, ensure_ascii=False)),
         result("04-4", "InferenceService Ready·URL", 6, r4, "fraud-v2"),
@@ -310,7 +321,17 @@ def grade_05(oc: Oc, ns: str) -> list[Result]:
         and non_todo((resources.get("requests", {}) or {}).get("memory"))
 
     image = container.get("image", "")
-    r4 = bool(PINNED_IMAGE.search(image)) and has_values(evidence, ["model_revision", "stream_http", "stream_transcript_sha256"]) \
+    command_line = " ".join(str(item) for item in [
+        *container.get("command", []), *container.get("args", [])
+    ]).lower()
+    deployment = oc.get("deployment", "support-llm", ns)
+    ready_pods = [
+        pod for pod in oc.list("pod", ns, "app=support-llm")
+        if condition_true(pod)
+    ]
+    workload_ready = deployment_ready(deployment) or bool(ready_pods)
+    r4 = workload_ready and ("vllm" in image.lower() or "vllm" in command_line) \
+        and bool(PINNED_IMAGE.search(image)) and has_values(evidence, ["model_revision", "stream_http", "stream_transcript_sha256"]) \
         and evidence.get("stream_http", "").startswith("2")
     r5 = has_values(evidence, ["concurrency", "p95_latency_ms", "tokens_per_second", "gpu_memory_mib", "gpu_utilization_pct", "queue_depth", "error_rate"])
 
@@ -318,14 +339,20 @@ def grade_05(oc: Oc, ns: str) -> list[Result]:
         result("05-1", "Pending event 기반 근본 원인", 6, r1, "vllm-evidence ConfigMap"),
         result("05-2", "A10 selector·정확한 toleration", 6, r2, workload),
         result("05-3", "GPU 1개·CPU·memory request", 6, r3, json.dumps(resources, ensure_ascii=False)),
-        result("05-4", "고정 image/model revision·streaming", 6, r4, image or "image missing"),
+        result("05-4", "Ready vLLM·고정 image/model revision·streaming", 6, r4, image or "image missing"),
         result("05-5", "부하·latency·throughput·GPU·queue 기준선", 6, r5, "vllm-evidence ConfigMap"),
     ]
 
 
 def grade_06(oc: Oc, ns: str) -> list[Result]:
     evidence = cm_data(oc, "registry-evidence", ns)
-    r1 = has_values(evidence, ["model_id", "version_1_0_id", "version_1_1_id"]) \
+    registries = oc.list_all("modelregistries.modelregistry.opendatahub.io")
+    available_registries = [
+        registry for registry in registries
+        if condition_true(registry, "Available") or condition_true(registry)
+    ]
+    r1 = bool(available_registries) \
+        and has_values(evidence, ["model_id", "version_1_0_id", "version_1_1_id"]) \
         and evidence.get("version_1_0_id") != evidence.get("version_1_1_id")
     r2 = is_sha(evidence.get("oci_digest_1_0")) and is_sha(evidence.get("oci_digest_1_1")) \
         and evidence.get("oci_digest_1_0") != evidence.get("oci_digest_1_1") \
@@ -337,7 +364,7 @@ def grade_06(oc: Oc, ns: str) -> list[Result]:
         and str(evidence.get("deployment_artifact_digest", "")).removeprefix("sha256:") == str(evidence.get("oci_digest_1_1", "")).removeprefix("sha256:")
 
     return [
-        result("06-1", "fraud-risk identity·두 version", 6, r1, "registry-evidence ConfigMap"),
+        result("06-1", "Available Registry·fraud-risk identity·두 version", 6, r1, f"registries={len(available_registries)}"),
         result("06-2", "서로 다른 OCI digest·pull checksum", 6, r2, "digest 값은 유효성만 검사"),
         result("06-3", "계보 metadata 완성", 6, r3, "source/data/run/metrics/use/approval"),
         result("06-4", "v1beta1 API 응답 증적", 6, r4, "v1beta1_response_sha256"),
@@ -374,14 +401,27 @@ def grade_08(oc: Oc, ns: str) -> list[Result]:
         and evidence.get("llm_compressor_support_status") == "Developer Preview"
 
     jobs = oc.list("lmevaljob", ns)
-    r3 = len(jobs) >= 2 and has_values(evidence, ["baseline_lmeval_job", "optimized_lmeval_job", "standard_task", "korean_benchmark", "safety_benchmark", "sample_count", "failed_samples"])
+    succeeded_jobs = [
+        item for item in jobs
+        if dig(item, "status", "state") == "Complete"
+        and dig(item, "status", "reason") == "Succeeded"
+        and non_todo(dig(item, "status", "results"))
+    ]
+    named_jobs = {
+        dig(item, "metadata", "name") for item in succeeded_jobs
+    }
+    r3 = len(succeeded_jobs) >= 2 \
+        and evidence.get("baseline_lmeval_job") in named_jobs \
+        and evidence.get("optimized_lmeval_job") in named_jobs \
+        and evidence.get("baseline_lmeval_job") != evidence.get("optimized_lmeval_job") \
+        and has_values(evidence, ["standard_task", "korean_benchmark", "safety_benchmark", "sample_count", "failed_samples"])
     r4 = has_values(evidence, ["quality_delta", "safety_delta", "p95_latency_delta", "throughput_delta", "memory_delta", "decision", "rollback_uri"]) \
         and non_todo(evidence.get("rollback_uri"))
 
     return [
         result("08-1", "고정 baseline 계약", 6, r1, "optimization-evidence ConfigMap"),
         result("08-2", "한 가지 최적화·digest·지원 상태", 6, r2, "job/quantize-support-llm"),
-        result("08-3", "동일 조건 LMEval 두 실행", 6, r3, f"LMEvalJobs={len(jobs)}"),
+        result("08-3", "동일 조건 LMEval 두 실행 성공", 6, r3, f"succeeded={len(succeeded_jobs)}/{len(jobs)}"),
         result("08-4", "품질·성능 비교와 rollback", 6, r4, "comparison + rollback_uri"),
     ]
 
@@ -403,6 +443,12 @@ def grade_09(oc: Oc, ns: str) -> list[Result]:
     rolebindings = oc.list("rolebinding", ns)
     r3 = bool(network_policies) and any(
         dig(binding, "roleRef", "name") not in {"admin", "cluster-admin"}
+        and any(
+            subject.get("kind") == "ServiceAccount"
+            and subject.get("name") == "rag-app"
+            and subject.get("namespace", ns) == ns
+            for subject in (binding.get("subjects", []) or [])
+        )
         for binding in rolebindings
     )
     r4 = evidence.get("unauthorized_retrieval_count") == "0" \

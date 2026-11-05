@@ -30,7 +30,7 @@ spec:
       pipelineDBName: mlpipeline
       username: mlpipeline
       passwordSecret:
-        name: REPLACE_ME
+        name: dspa-db
         key: password
       pvcSize: 1Gi
   mlmd:

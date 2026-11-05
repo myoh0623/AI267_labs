@@ -12,6 +12,8 @@
 
 GPU가 없는 클러스터에서는 리소스 구조와 Pending 진단까지만 연습하고, 전체 채점은 GPU가 있는 RHOAI 실습 환경에서 수행한다.
 
+`exam-provided-hardware` ConfigMap은 시작 시 실제 GPU node 수를 기록한다. 0을 가짜 GPU로 대체하지 않으며, 현재 클러스터에서는 1~3번의 scheduler 진단과 YAML 교정까지만 유효하다.
+
 ```bash
 ../../exam-lab.sh grade 05
 ```

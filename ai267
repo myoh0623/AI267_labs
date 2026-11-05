@@ -5,6 +5,7 @@ SCRIPT_PATH=$(readlink -f -- "${BASH_SOURCE[0]}")
 LAB_HOME=${AI267_LAB_HOME:-$(cd -- "$(dirname -- "${SCRIPT_PATH}")" && pwd)}
 EXAM_LAB="${LAB_HOME}/exam-lab.sh"
 PROVIDE_MINIO="${LAB_HOME}/scripts/provide-practice-minio.sh"
+PROVIDE_INPUTS="${LAB_HOME}/scripts/provide-task-inputs.sh"
 
 if [[ -z "${KUBECONFIG:-}" && -f "${HOME}/.auth/lab-kubeconfig" ]]; then
   export KUBECONFIG="${HOME}/.auth/lab-kubeconfig"
@@ -45,7 +46,7 @@ read_secret_value() {
 load_minio_credentials() {
   local task=$1 access_key secret_key
   case "${task}" in
-    01|02|03|04) ;;
+    01|02|03|04|08|10) ;;
     *) return 0 ;;
   esac
 
@@ -109,9 +110,10 @@ case "${command}" in
     load_minio_credentials "${target}"
     "${EXAM_LAB}" lab-env switch "${target}"
     "${EXAM_LAB}" prepare "${target}"
-    if [[ "${target}" == 01 || "${target}" == 03 || "${target}" == 04 ]]; then
+    if [[ "${target}" == 01 || "${target}" == 03 || "${target}" == 04 || "${target}" == 08 || "${target}" == 10 ]]; then
       bash "${PROVIDE_MINIO}" "${target}"
     fi
+    bash "${PROVIDE_INPUTS}" "${target}"
     "${EXAM_LAB}" status "${target}"
     printf '\nTask %s 준비 완료. 웹 문제의 요구 사항을 수행한 뒤 실행하세요:\n' "${target}"
     printf '  ai267 finish %s\n' "${target}"
