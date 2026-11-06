@@ -68,18 +68,6 @@ data:
 apiVersion: v1
 kind: ConfigMap
 metadata:
-  name: platform-evidence
-  namespace: ex267-fraud
-data:
-  operator_csv: TODO
-  datasciencecluster: TODO
-  dsc_ready: "false"
-  managed_components: TODO
-  dashboard_verified: "false"
----
-apiVersion: v1
-kind: ConfigMap
-metadata:
   name: identity-evidence
   namespace: ex267-fraud
 data:

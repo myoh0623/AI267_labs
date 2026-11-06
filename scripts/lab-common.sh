@@ -91,9 +91,10 @@ lab_task_namespace() {
 
 lab_task_points() {
   case "$1" in
-    01|08|10) printf '24\n' ;;
-    02|05|06|07) printf '30\n' ;;
-    03|04|09) printf '36\n' ;;
+    01) printf '21\n' ;;
+    08|10) printf '24\n' ;;
+    02|05|06|07|09) printf '30\n' ;;
+    03|04) printf '36\n' ;;
   esac
 }
 
@@ -103,7 +104,7 @@ lab_task_dir() {
 
 lab_list_tasks() {
   cat <<'EOF'
-01  플랫폼·사용자·프로젝트·S3            24점
+01  사용자·프로젝트·S3                   21점
 02  Workbench·이미지·Git·S3             30점
 03  KFP·Elyra Pipeline·예약 실행         36점
 04  OpenVINO·Custom Runtime·인증         36점
@@ -111,7 +112,7 @@ lab_list_tasks() {
 06  Model Registry·계보                 30점
 07  TrustyAI·플랫폼 모니터링             30점
 08  LLM 최적화·LMEval                   24점
-09  Guardrailed RAG                     36점
+09  Guardrailed RAG                     30점
 10  재현·증적·롤백                      24점
 EOF
 }

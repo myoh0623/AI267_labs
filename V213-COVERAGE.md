@@ -9,20 +9,20 @@
 | 3 | `00-Getting-Started/01-About.md` | 전체 목표 | 안내 문서 |
 | 4 | `00-Getting-Started/02-Exam-Details.md` | 수행 전략 | 안내 문서 |
 | 5 | `00-Getting-Started/03-How-To-Use.md` | 문제별 start/grade/finish | CLI 도움말·안내 문서 |
-| 6 | `01-02 Installation of RHOAI.md` | Task 01 설치 검증 | 01-1 |
-| 7 | `01-0301 UserPermission.md` | Task 01 프로젝트 협업 권한 + Task 02 Workbench storage/resources/Git | 01-4, 01-5, 02-3, 02-4, 02-7 |
-| 8 | `01-0302 Usermanagement.md` | Task 01 Dashboard 그룹 제한 | 01-2, 01-8 |
+| 6 | `01-02 Installation of RHOAI.md` | 무점수 환경 사전 점검·빈 클러스터 설치 참고 | preflight |
+| 7 | `01-0301 UserPermission.md` | Task 01 프로젝트 협업 권한 + Task 02 Workbench storage/resources/Git | 01-3, 01-4, 02-3, 02-4, 02-7 |
+| 8 | `01-0302 Usermanagement.md` | Task 01 Dashboard 그룹 제한 | 01-1, 01-7 |
 | 9 | `01-OpenShift-Architecture/01-Concepts.md` | Task 01 preflight | 안내·API 점검 |
 | 10 | `02-01-workbench-size.md` | Task 02 HardwareProfile·Git | 02-5, 02-7 |
 | 11 | `02-03 Workbenchsize.md` | Task 02 자원·HardwareProfile·Git | 02-4, 02-5, 02-7 |
 | 12 | `02-06 Data Connections.md` | Task 02 Workbench S3 | 02-8, 02-9 |
 | 13 | `02-Projects-and-Applications/01-RHOAI-Introduction.md` | Task 01·02 안내 | 안내 문서 |
 | 14 | `02-Projects-and-Applications/02-03 Modify_workbench.md` | Task 02 기존 Workbench 수정 | 02-6, 02-7 |
-| 15 | `02-Projects-and-Applications/02-RHOAI-Installation.md` | Task 01 설치 검증/전용 설치 문서 | 01-1 |
-| 16 | `02-Projects-and-Applications/03-RHOAI-Verification-and-Usage.md` | Task 01 Dashboard 검증 | 01-1, 01-2 |
+| 15 | `02-Projects-and-Applications/02-RHOAI-Installation.md` | 무점수 환경 사전 점검·빈 클러스터 설치 참고 | preflight |
+| 16 | `02-Projects-and-Applications/03-RHOAI-Verification-and-Usage.md` | Task 01 Dashboard 사용자 그룹 구성 | 01-1 |
 | 17 | `03-03 ModifyWorkbench.md` | Task 02 CUDA·ConfigMap·Git | 02-6, 02-7 |
-| 18 | `03-User-Permissions/01-Users-Projects-and-Permissions.md` | Task 01 user/admin group | 01-2, 01-8 |
-| 19 | `03-User-Permissions/02-User-Management-and-RBAC.md` | Task 01 project RBAC | 01-3, 01-4, 01-5 |
+| 18 | `03-User-Permissions/01-Users-Projects-and-Permissions.md` | Task 01 user/admin group | 01-1, 01-7 |
+| 19 | `03-User-Permissions/02-User-Management-and-RBAC.md` | Task 01 project RBAC | 01-2, 01-3, 01-4 |
 | 20 | `03-User-Permissions/03-Resource-Management.md` | Task 02 culling·자원 profile | 02-2, 02-4, 02-5 |
 | 21 | `05 S3 configuration.md/02 Creation of Bucket & dataconnection S3.md` | Task 02 S3 connection | 02-8, 02-9 |
 | 22 | `05-00 Create a Custom Notebook Image.md` | Task 02 build/import | 02-1, 02-2 |
@@ -45,5 +45,5 @@
 - V2.13의 ModelMesh Multi-model은 RHOAI 3.3에서 제거됐으므로 다시 설치하지 않는다. 동일한 외부 Route, token/no-token, ONNX/OpenVINO API 행동을 지원되는 KServe `RawDeployment`로 검증한다.
 - 원본의 `RHOAI2.13` Git branch는 현재 과정 입력인 `RHOAI3.3`으로 바꾼다. branch/commit/merge 학습 행동은 그대로다.
 - 실제 HTPasswd 사용자 생성은 공유 클러스터 인증을 파괴할 수 있으므로 Group/RBAC subject로 제공한다. 권한·멤버십·Dashboard allowlist 결과는 실제 리소스로 채점한다.
-- 설치 실습은 공유 클러스터에서 현재 Operator/DSC 검증으로 수행한다. 새 전용 클러스터의 설치 절차는 Task 01의 별도 문서에 보존한다.
+- 설치 상태는 공유 클러스터에서 무점수 preflight로만 확인한다. 새 전용 클러스터의 설치 절차는 Task 01의 별도 참고 문서에 보존한다.
 

@@ -7,7 +7,7 @@ source "${SCRIPT_DIR}/lab-common.sh"
 task=$1
 lab_require_login
 
-printf 'Task %s preflight\n' "${task}"
+printf 'Task %s 환경 사전 점검 (무점수)\n' "${task}"
 printf '%-32s %s\n' 'OpenShift login' "$(oc whoami)"
 printf '%-32s %s\n' 'Namespace' "$(lab_task_namespace "${task}")"
 
@@ -24,6 +24,15 @@ case "${task}" in
   01)
     check_api datasciencecluster.opendatahub.io datascienceclusters 'DataScienceCluster CRD'
     check_api services.platform.opendatahub.io auths 'OpenShift AI Auth CRD'
+    lab_require_command python3
+    rhoai_csv=$(oc get clusterserviceversion -A -o json 2>/dev/null \
+      | python3 -c 'import json,sys; items=json.load(sys.stdin).get("items",[]); print(next((i.get("status",{}).get("phase","") for i in items if "openshift ai" in i.get("spec",{}).get("displayName","").lower() or "rhods-operator" in i.get("metadata",{}).get("name","").lower()), "NOT FOUND"))' \
+      2>/dev/null || printf 'UNKNOWN')
+    dsc_ready=$(oc get datasciencecluster -o json 2>/dev/null \
+      | python3 -c 'import json,sys; items=json.load(sys.stdin).get("items",[]); print("READY" if any(any(c.get("type")=="Ready" and str(c.get("status","")).lower()=="true" for c in i.get("status",{}).get("conditions",[])) or any(str(c.get("managementState","")).lower()=="managed" for c in i.get("status",{}).get("components",{}).values()) for i in items) else "NOT READY")' \
+      2>/dev/null || printf 'UNKNOWN')
+    printf '%-32s %s\n' 'Red Hat OpenShift AI CSV' "${rhoai_csv}"
+    printf '%-32s %s\n' 'DataScienceCluster state' "${dsc_ready}"
     ;;
   02)
     check_api kubeflow.org notebooks 'Kubeflow Notebook CRD'

@@ -1,6 +1,6 @@
 # 전용 빈 클러스터용 RHOAI 3.3 설치 연습
 
-이 문서는 **폐기 가능한 빈 전용 클러스터**에서만 사용한다. 기존 실습/공유 클러스터에서 Operator, CRD, namespace를 제거하지 않는다. Task 01의 기본 흐름은 설치를 변경하지 않고 현재 상태를 검증하는 것이다.
+이 문서는 **폐기 가능한 빈 전용 클러스터**에서만 사용하는 별도 설치 연습 자료다. 기존 실습/공유 클러스터에서 Operator, CRD, namespace를 제거하지 않는다. 설치 상태는 Task 01의 문항이나 점수에 포함되지 않는다.
 
 ## Web Console 절차
 
@@ -22,5 +22,5 @@ oc get pods -n redhat-ods-applications
 oc get routes -n redhat-ods-applications
 ```
 
-설치/제거 자체는 `ai267 reset`의 관리 범위가 아니다. 설치 검증 결과만 Task 01의 `platform-evidence`에 기록한다.
+설치/제거 자체는 `ai267 reset`의 관리 범위가 아니다. `ai267 check 01`에서 환경 상태를 무점수로 확인한다.
 

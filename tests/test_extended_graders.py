@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Positive fixtures for the expanded Task 01-04 grading contracts."""
+"""Positive fixtures for candidate-owned grading contracts."""
 
 from __future__ import annotations
 
@@ -76,22 +76,6 @@ def secret(name, *, service_account=None):
 def task01():
     oc = FixtureOc()
     ns = "ex267-fraud"
-    oc.add_all("clusterserviceversion", [{
-        "metadata": metadata("rhods-operator.3.3.1"),
-        "spec": {"displayName": "Red Hat OpenShift AI"},
-        "status": {"phase": "Succeeded"},
-    }])
-    oc.add_all("datasciencecluster", [{
-        "metadata": metadata("default-dsc"),
-        "status": {"components": {"dashboard": {"managementState": "Managed"}}},
-    }])
-    oc.add("configmap", "platform-evidence", cm("platform-evidence", {
-        "operator_csv": "rhods-operator.3.3.1",
-        "datasciencecluster": "default-dsc",
-        "dsc_ready": "true",
-        "managed_components": "dashboard,workbenches",
-        "dashboard_verified": "true",
-    }), ns)
     for name, users in {
         "devops-wala": ["developer", "rajan", "punit"],
         "rhoai-exam-admins": ["raja", "andrew"],
@@ -312,14 +296,58 @@ def task04():
     return oc, ns
 
 
+def task06():
+    oc = FixtureOc()
+    ns = "ex267-t06-registry"
+    oc.add("configmap", "registry-evidence", cm("registry-evidence", {
+        "model_id": "fraud-risk", "version_1_0_id": "version-100",
+        "version_1_1_id": "version-110", "oci_digest_1_0": SHA,
+        "oci_digest_1_1": SHA_B, "pulled_artifact_sha256": SHA_C,
+        "git_revision": GIT, "data_reference": "transactions-v1",
+        "pipeline_run": "fraud-run-42", "format": "onnx",
+        "metrics": "auc=0.94", "intended_use": "fraud screening",
+        "limitations": "synthetic data", "owner": "northstar-risk",
+        "approval": "approved", "registry_endpoint": "https://registry.example",
+        "v1beta1_response_sha256": SHA, "deployed_version": "1.1.0",
+        "deployment_artifact_digest": SHA_B,
+    }), ns)
+    return oc, ns
+
+
+def task09():
+    oc = FixtureOc()
+    ns = "ex267-t09-rag"
+    oc.add("configmap", "rag-evidence", cm("rag-evidence", {
+        "source_id": "ai267-chapter09-docs", "source_revision": "synthetic-v1",
+        "document_acl": "public/restricted", "embedding_model_revision": "hash-v1",
+        "index_digest": SHA, "unauthorized_retrieval_count": "0",
+        "stream_http": "200", "citation_response_sha256": SHA_B,
+        "tool_schema_sha256": SHA_C, "tool_read_only": "true",
+        "tool_timeout_seconds": "5", "tool_step_limit": "3",
+        "tool_audit_sha256": SHA,
+        "direct_injection": "pass", "indirect_injection": "pass",
+        "unauthorized_document": "pass", "malformed_tool_argument": "pass",
+        "dependency_outage": "pass", "false_positive_test": "pass",
+    }), ns)
+    oc.add_list("networkpolicy", ns, [{"metadata": metadata("rag-egress")}])
+    oc.add_list("rolebinding", ns, [{
+        "roleRef": {"name": "rag-reader"},
+        "subjects": [{"kind": "ServiceAccount", "name": "rag-app", "namespace": ns}],
+    }])
+    return oc, ns
+
+
 def main():
-    for task, factory in (("01", task01), ("02", task02), ("03", task03), ("04", task04)):
+    for task, factory in (
+        ("01", task01), ("02", task02), ("03", task03),
+        ("04", task04), ("06", task06), ("09", task09),
+    ):
         oc, namespace = factory()
         results = GRADE["GRADERS"][task](oc, namespace)
         failed = [item.check_id for item in results if not item.passed]
         assert not failed, (task, failed)
         assert sum(item.points for item in results) == GRADE["TASKS"][task][1]
-    print("[validate] positive Task 01-04 grader fixtures passed")
+    print("[validate] candidate-owned Task 01-04, 06, 09 grader fixtures passed")
 
 
 if __name__ == "__main__":

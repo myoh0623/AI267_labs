@@ -17,7 +17,7 @@ from typing import Any, Callable
 
 
 TASKS = {
-    "01": ("ex267-fraud", 24, "플랫폼·사용자·프로젝트·S3"),
+    "01": ("ex267-fraud", 21, "사용자·프로젝트·S3"),
     "02": ("ex267-t02-workbench", 30, "Workbench·이미지·Git·S3"),
     "03": ("ex267-t03-pipeline", 36, "KFP·Elyra Pipeline·예약 실행"),
     "04": ("ex267-t04-serving", 36, "OpenVINO·Custom Runtime·인증"),
@@ -25,7 +25,7 @@ TASKS = {
     "06": ("ex267-t06-registry", 30, "Model Registry·계보"),
     "07": ("ex267-t07-monitoring", 30, "TrustyAI·플랫폼 모니터링"),
     "08": ("ex267-t08-evaluation", 24, "LLM 최적화·LMEval"),
-    "09": ("ex267-t09-rag", 36, "Guardrailed RAG"),
+    "09": ("ex267-t09-rag", 30, "Guardrailed RAG"),
     "10": ("ex267-t10-evidence", 24, "재현·증적·롤백"),
 }
 
@@ -151,30 +151,6 @@ def result(check_id: str, description: str, points: int, passed: bool, detail: s
 
 
 def grade_01(oc: Oc, ns: str) -> list[Result]:
-    platform = cm_data(oc, "platform-evidence", ns)
-    csvs = oc.list_all("clusterserviceversion")
-    operator_ready = any(
-        str(dig(item, "status", "phase", default="")).lower() == "succeeded"
-        and (
-            "openshift ai" in str(dig(item, "spec", "displayName", default="")).lower()
-            or "rhods-operator" in str(dig(item, "metadata", "name", default="")).lower()
-        )
-        for item in csvs
-    )
-    dscs = oc.list_all("datasciencecluster")
-    dsc_ready = any(
-        condition_true(item)
-        or any(
-            str(component.get("managementState", "")).lower() == "managed"
-            for component in (dig(item, "status", "components", default={}) or {}).values()
-        )
-        for item in dscs
-    )
-    r1 = operator_ready and dsc_ready and has_values(
-        platform, ["operator_csv", "datasciencecluster", "managed_components"]
-    ) and platform.get("dsc_ready", "").lower() == "true" \
-        and platform.get("dashboard_verified", "").lower() == "true"
-
     user_group = oc.get("group", "devops-wala")
     admin_group = oc.get("group", "rhoai-exam-admins")
     user_members = set(user_group.get("users", []) if user_group else [])
@@ -234,14 +210,13 @@ def grade_01(oc: Oc, ns: str) -> list[Result]:
         and identity.get("admin_group") == "rhoai-exam-admins"
 
     return [
-        result("01-1", "RHOAI Operator·DataScienceCluster·Dashboard 검증", 3, r1, f"csv_ready={operator_ready}, dsc_ready={dsc_ready}"),
-        result("01-2", "사용자·관리자 그룹 구성과 Auth 연결", 3, r2, f"users={sorted(user_members)}, admins={sorted(admin_members)}"),
-        result("01-3", "프로젝트 팀·환경 라벨", 3, r3, "team=northstar-risk, environment=exam"),
-        result("01-4", "developer1 최소 권한 edit RoleBinding", 3, r4, f"roles={developer_roles or ['none']}"),
-        result("01-5", "rajan·punit admin, suraj edit 프로젝트 협업 권한", 3, r5, "namespace 범위 RoleBinding"),
-        result("01-6", "fraud-s3 protocol·endpoint·bucket·Secret", 3, r6, "Secret 값은 출력하지 않음"),
-        result("01-7", "새 프로세스 read/write SHA-256 증적", 3, r7, "fraud-s3-evidence ConfigMap"),
-        result("01-8", "Dashboard 접근 allowlist가 지정 두 그룹으로 제한됨", 3, r8, "Auth/auth"),
+        result("01-1", "사용자·관리자 그룹 구성과 Auth 연결", 3, r2, f"users={sorted(user_members)}, admins={sorted(admin_members)}"),
+        result("01-2", "프로젝트 팀·환경 라벨", 3, r3, "team=northstar-risk, environment=exam"),
+        result("01-3", "developer1 최소 권한 edit RoleBinding", 3, r4, f"roles={developer_roles or ['none']}"),
+        result("01-4", "rajan·punit admin, suraj edit 프로젝트 협업 권한", 3, r5, "namespace 범위 RoleBinding"),
+        result("01-5", "fraud-s3 protocol·endpoint·bucket·Secret", 3, r6, "Secret 값은 출력하지 않음"),
+        result("01-6", "새 프로세스 read/write SHA-256 증적", 3, r7, "fraud-s3-evidence ConfigMap"),
+        result("01-7", "Dashboard 접근 allowlist가 지정 두 그룹으로 제한됨", 3, r8, "Auth/auth"),
     ]
 
 
@@ -601,13 +576,7 @@ def grade_05(oc: Oc, ns: str) -> list[Result]:
 
 def grade_06(oc: Oc, ns: str) -> list[Result]:
     evidence = cm_data(oc, "registry-evidence", ns)
-    registries = oc.list_all("modelregistries.modelregistry.opendatahub.io")
-    available_registries = [
-        registry for registry in registries
-        if condition_true(registry, "Available") or condition_true(registry)
-    ]
-    r1 = bool(available_registries) \
-        and has_values(evidence, ["model_id", "version_1_0_id", "version_1_1_id"]) \
+    r1 = has_values(evidence, ["model_id", "version_1_0_id", "version_1_1_id"]) \
         and evidence.get("version_1_0_id") != evidence.get("version_1_1_id")
     r2 = is_sha(evidence.get("oci_digest_1_0")) and is_sha(evidence.get("oci_digest_1_1")) \
         and evidence.get("oci_digest_1_0") != evidence.get("oci_digest_1_1") \
@@ -619,7 +588,7 @@ def grade_06(oc: Oc, ns: str) -> list[Result]:
         and str(evidence.get("deployment_artifact_digest", "")).removeprefix("sha256:") == str(evidence.get("oci_digest_1_1", "")).removeprefix("sha256:")
 
     return [
-        result("06-1", "Available Registry·fraud-risk identity·두 version", 6, r1, f"registries={len(available_registries)}"),
+        result("06-1", "fraud-risk identity·두 version", 6, r1, "model_id + 서로 다른 version ID"),
         result("06-2", "서로 다른 OCI digest·pull checksum", 6, r2, "digest 값은 유효성만 검사"),
         result("06-3", "계보 metadata 완성", 6, r3, "source/data/run/metrics/use/approval"),
         result("06-4", "v1beta1 API 응답 증적", 6, r4, "v1beta1_response_sha256"),
@@ -688,10 +657,6 @@ def deployment_ready(deployment: dict[str, Any] | None) -> bool:
 
 
 def grade_09(oc: Oc, ns: str) -> list[Result]:
-    app = oc.get("deployment", "genai-app", ns)
-    route = oc.get("route", "genai-app", ns)
-    r1 = deployment_ready(app) and route is not None
-
     evidence = cm_data(oc, "rag-evidence", ns)
     r2 = has_values(evidence, ["source_id", "source_revision", "document_acl", "embedding_model_revision", "index_digest"]) and is_sha(evidence.get("index_digest"))
     network_policies = oc.list("networkpolicy", ns)
@@ -715,12 +680,11 @@ def grade_09(oc: Oc, ns: str) -> list[Result]:
         and all(evidence.get(key, "").lower() == "pass" for key in ["direct_injection", "indirect_injection", "unauthorized_document", "malformed_tool_argument", "dependency_outage", "false_positive_test"])
 
     return [
-        result("09-1", "RAG 애플리케이션 Ready·Route", 6, r1, "deployment/route genai-app"),
-        result("09-2", "버전된 ingestion·ACL·index digest", 6, r2, "rag-evidence ConfigMap"),
-        result("09-3", "retrieval 전 권한 경계·최소 권한", 6, r3, f"NetworkPolicies={len(network_policies)}"),
-        result("09-4", "unauthorized=0·streaming·citation", 6, r4, "rag-evidence ConfigMap"),
-        result("09-5", "read-only typed tool·timeout·audit", 6, r5, "rag-evidence ConfigMap"),
-        result("09-6", "주입·권한·오류·장애 시험", 6, r6, "6-case matrix"),
+        result("09-1", "버전된 ingestion·ACL·index digest", 6, r2, "rag-evidence ConfigMap"),
+        result("09-2", "retrieval 전 권한 경계·최소 권한", 6, r3, f"NetworkPolicies={len(network_policies)}"),
+        result("09-3", "unauthorized=0·streaming·citation", 6, r4, "rag-evidence ConfigMap"),
+        result("09-4", "read-only typed tool·timeout·audit", 6, r5, "rag-evidence ConfigMap"),
+        result("09-5", "주입·권한·오류·장애 시험", 6, r6, "6-case matrix"),
     ]
 
 

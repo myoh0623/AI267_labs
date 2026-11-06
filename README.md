@@ -62,7 +62,7 @@ cd AI267_labs
 
 | 문제 | 실습 | 기본 프로젝트 | 점수 |
 | --- | --- | --- | ---: |
-| 01 | 플랫폼·사용자·프로젝트·S3 | `ex267-fraud` | 24 |
+| 01 | 사용자·프로젝트·S3 | `ex267-fraud` | 21 |
 | 02 | Workbench·이미지·Git·S3 | `ex267-t02-workbench` | 30 |
 | 03 | KFP·Elyra Pipeline·예약 실행 | `ex267-t03-pipeline` | 36 |
 | 04 | OpenVINO·Custom Runtime·인증 | `ex267-t04-serving` | 36 |
@@ -70,7 +70,7 @@ cd AI267_labs
 | 06 | Model Registry·계보 | `ex267-t06-registry` | 30 |
 | 07 | TrustyAI·플랫폼 모니터링 | `ex267-t07-monitoring` | 30 |
 | 08 | LLM 최적화·LMEval | `ex267-t08-evaluation` | 24 |
-| 09 | Guardrailed RAG | `ex267-t09-rag` | 36 |
+| 09 | Guardrailed RAG | `ex267-t09-rag` | 30 |
 | 10 | 재현·증적·롤백 | `ex267-t10-evidence` | 24 |
 
 ## 설계 원칙
@@ -89,7 +89,7 @@ cd AI267_labs
 
 | Task | `ai267 start`가 준비하는 선행 입력 |
 | --- | --- |
-| 01 | MinIO bucket/credential, identity/Auth 복원 계약, 플랫폼 증적 skeleton |
+| 01 | MinIO bucket/credential, identity/Auth 복원 계약 |
 | 02 | MinIO, Custom Image source, 불완전 `git-experiments`, TensorBoard 코드, culler 복원본 |
 | 03 | MinIO 합성 CSV, DSPA DB Secret, KFP v2·Elyra source와 5분 schedule 계약 |
 | 04 | 교재 ONNX v2/v1, SHA-256, 공식 OpenVINO runtime, 2.13→3.3 serving 호환 계약 |
