@@ -852,8 +852,14 @@ def grade_09(oc: Oc, ns: str) -> list[Result]:
                 namespace_name = dig(
                     peer, "namespaceSelector", "matchLabels", "kubernetes.io/metadata.name"
                 )
-                if namespace_name != "openshift-dns" \
-                        or any(str(port.get("port")) != "53" for port in ports):
+                dns_ports = {
+                    (str(port.get("port")), port.get("protocol", "TCP"))
+                    for port in ports
+                }
+                if namespace_name != "openshift-dns" or dns_ports != {
+                    ("53", "UDP"), ("53", "TCP"),
+                    ("5353", "UDP"), ("5353", "TCP"),
+                }:
                     return False
                 dns_ok = True
         return destinations == {"mock-llm", "todo-tool"} and dns_ok

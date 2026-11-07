@@ -28,7 +28,7 @@
 | 06 | `serving-modelregistry` 교재 Lab | Model Registry component `Managed`, `redhattraining-model-registry` `Available=True`, MariaDB/Registry Pod 실행 확인. CR API는 v1beta1, 실제 metadata REST는 Service `http-api`의 v1alpha3임을 실측했다. |
 | 07 | Chapter 05, Iris 기준 모델·client·reference | 교재 환경과 시험 namespace의 `iris-monitor`, runtime, client가 Ready 상태임을 확인. |
 | 08 | 합성 completions API, 고정 OpenBookQA/GPT-2 offline cache, 한국어·안전 Unitxt recipe | CDN에 의존하지 않고 baseline/optimized가 모두 `Complete/Succeeded`; custom 실행에서 OpenBookQA, `tr_0` 한국어, `tr_1` 안전 결과 JSON 생성 확인. |
-| 09 | vendor mock LLM, 쓰기 가능한 미완성 tool, RAG 앱, ACL 입력, 고정 verifier | 세 Deployment 1/1 Ready와 `genai-app` Route를 제공하되 답안 Role/RoleBinding/NetworkPolicy와 ACL·streaming·read-only 동작은 만들지 않는다. |
+| 09 | vendor mock LLM, 쓰기 가능한 미완성 tool, RAG 앱, ACL 입력, 고정 verifier | 세 Deployment 1/1 Ready와 `genai-app` Route를 제공하되 답안 Role/RoleBinding/NetworkPolicy와 ACL·streaming·read-only 동작은 만들지 않는다. 실제 OVN egress에서는 DNS Service 53이 endpoint 5353으로 DNAT되므로 둘 다 제한적으로 허용해야 함을 verifier 실행으로 확인했다. |
 | 10 | current/previous 합성 모델, sample, lock, replay 코드, MinIO 사본 | ConfigMap 7개 입력과 전용 MinIO bucket 생성 확인. replay Job과 evidence는 응시자 작업으로 유지. |
 
 ## 채점기 보강

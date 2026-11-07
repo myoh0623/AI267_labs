@@ -9,7 +9,7 @@
 1. source ID/revision/ACL/embedding revision/index digest를 `rag-evidence`에 기록한다.
 2. retrieval 전에 ACL을 적용하고 unauthorized retrieval이 0건임을 확인한다.
 3. streaming 응답과 구조적 citation의 digest를 기록한다.
-4. `rag-reader` Role은 `rag-documents` ConfigMap의 `get`만 허용하고, RoleBinding은 `rag-app` ServiceAccount만 연결한다. `app=genai-app` Egress NetworkPolicy는 `mock-llm:8080`, `todo-tool:8080`, DNS 53만 허용한다.
+4. `rag-reader` Role은 `rag-documents` ConfigMap의 `get`만 허용하고, RoleBinding은 `rag-app` ServiceAccount만 연결한다. `app=genai-app` Egress NetworkPolicy는 `mock-llm:8080`, `todo-tool:8080`, OpenShift DNS의 Service port 53과 endpoint target port 5353만 허용한다.
 5. `tool-service-code`와 `genai-app-code`를 수정해 tool을 read-only typed schema, timeout, step limit, audit로 제한한 뒤 `todo-tool`, `genai-app` Deployment를 rollout한다.
 6. direct/indirect injection, unauthorized document, malformed argument, outage, false positive 6개 시험을 수행한다. 제공 verifier Job이 성공한 뒤 결과를 모두 PASS로 기록한다.
 

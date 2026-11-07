@@ -395,7 +395,9 @@ def task09():
                 {"to": [{"namespaceSelector": {"matchLabels": {
                     "kubernetes.io/metadata.name": "openshift-dns"
                 }}}], "ports": [{"protocol": "UDP", "port": 53},
-                                  {"protocol": "TCP", "port": 53}]},
+                                  {"protocol": "TCP", "port": 53},
+                                  {"protocol": "UDP", "port": 5353},
+                                  {"protocol": "TCP", "port": 5353}]},
             ],
         },
     }])
