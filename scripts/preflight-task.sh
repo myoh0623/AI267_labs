@@ -59,6 +59,10 @@ case "${task}" in
   06)
     check_api modelregistry.opendatahub.io modelregistries 'Model Registry CRD'
     lab_require_command python3
+    if [[ -n "$(oc get modelregistries.modelregistry.opendatahub.io -A -o name 2>/dev/null || true)" ]]; then
+      oc wait --for=condition=Available modelregistries.modelregistry.opendatahub.io \
+        --all --all-namespaces --timeout=180s >/dev/null 2>&1 || true
+    fi
     registry_components=$(oc get datasciencecluster -o json 2>/dev/null \
       | python3 -c 'import json,sys; items=json.load(sys.stdin).get("items",[]); values=[i.get("metadata",{}).get("name","")+"="+i.get("status",{}).get("components",{}).get("modelregistry",{}).get("managementState","UNKNOWN") for i in items]; print(", ".join(values) or "UNKNOWN")' \
       2>/dev/null || printf 'UNKNOWN')

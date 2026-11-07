@@ -1,53 +1,45 @@
-# 실제 클러스터 검증 결과
+# 실습 환경 검증 요약
 
-기준 클러스터 검증일: 2026-11-05 (Asia/Seoul)<br>
-번호형 실습 완전 반영 검증일: 2026-11-06 (Asia/Seoul)
-채점 계약 재검증일: 2026-11-07 (Asia/Seoul)
+최종 검증일: 2026-11-07 (Asia/Seoul)
 
-대상: 전용 AI267 실습 클러스터, OpenShift 4.20.14 / OpenShift AI 3.3.1
+이 문서는 공개 가능한 검증 결과만 기록한다. 대상 클러스터 주소, 로그인 정보, Secret 값과 내부 API 응답 본문은 저장하지 않는다.
 
 ## 결론
 
-기존 10개 문제를 유지하면서 V2.13 번호형 Markdown 34개를 모두 추적했다. 누락된 실습 행동은 Task 01~04에 추가하고 실제 리소스·evidence 채점으로 연결했다. `ai267 start <task>`는 필요한 교재 Lab과 `exam-provided-*` 입력만 준비한다. 합성 데이터·코드·모델은 입력 자료이며 답안 Group/Auth, Workbench/Image/Git/S3, Pipeline/Schedule/Elyra, ServingRuntime/InferenceService/인증 evidence는 응시자가 직접 완성한다.
+기존 10개 문제는 유지했고, V2.13 번호형 Markdown 34개를 모두 문제 지침·환경 준비·실제 리소스 채점에 연결했다. `ai267 start <task>`는 해당 문제에 필요한 교재 Lab과 `exam-provided-*` 입력만 만들며, 응시자가 완성해야 할 답안 리소스는 만들지 않는다.
 
-2026-11-06 변경분은 로컬 Bash/Python/YAML/채점 계약/34개 source coverage 검증을 통과했다. 같은 변경분을 실제 클러스터의 별도 검증 checkout에 복사해 Task 02~04의 `start`, 의도된 0점 초기 채점, `cleanup`과 신규 starter YAML server-side dry-run을 확인했다. Task 03 교재 Workflow는 `Succeeded`, Task 04 교재 ModelCar 추론은 HTTP 200이었다. Task 01은 기존 응시 리소스를 덮어쓰지 않고 플랫폼·Auth·DSC를 읽기 전용으로 검사했다.
+`finish`는 만점일 때만 시험 namespace와 활성 교재 Lab을 정리한다. 실패하면 리소스를 보존하므로 수정한 뒤 다시 채점할 수 있다.
 
-채점기의 모든 신규 성공 분기는 합성 Kubernetes API 응답을 사용하는 positive fixture로 통과시켰다. 이 검증은 환경 준비가 답안을 미리 완성하지 않으며, 응시자가 요구 리소스를 만들었을 때만 각 항목이 통과한다는 계약까지 포함한다.
+## 자동 검증
 
-현재 클러스터의 유일한 물리적 제한은 GPU node가 0개라는 점이다. 따라서 Task 05의 YAML·Pending·scheduler 진단은 수행할 수 있지만 실제 vLLM GPU streaming과 성능 기준선은 GPU가 있는 환경에서만 만점 검증할 수 있다.
+`./exam-lab.sh validate`로 다음 항목을 확인했다.
 
-## 문제별 검증
+- Bash·Python 구문과 86개 YAML 문서 파싱
+- 10개 문제의 점수 계약
+- Task 01·06·09 부정 fixture와 주요 문제의 정상 fixture
+- V2.13 원문 34/34 경로·고정 checksum·채점 ID 매핑
+- 문제별 필수 파일과 seed/grader 계약 완전성
 
-| Task | 자동 제공 환경 | 실제 확인 결과 |
-| --- | --- | --- |
-| 01 | 전용 MinIO, identity/platform 계약 | CSV `rhods-operator.3.3.1` Succeeded, `default-dsc` Ready/Managed와 cluster-scoped Auth API를 읽기 전용으로 확인했다. 기존 `ex267-fraud`는 보존했고 초기 채점은 답안 미완료로 실패했다. |
-| 02 | Chapter 02, custom image source, HardwareProfile starter, 합성 Git/S3/TensorBoard 입력 | MinIO 입력 없이 자동 시작, 교재 custom image build 완료, 시험 입력 생성, 신규 starter dry-run 성공, 10개 항목 모두 의도된 초기 실패, cleanup과 culler 원상복구 확인. |
-| 03 | Chapter 06, KFP·Elyra 소스, 합성 CSV, DB Secret | 교재 DSPA Ready와 Workflow Succeeded, 시험 입력 생성, Elyra starter dry-run 성공, 9개 항목 모두 의도된 초기 실패, cleanup 확인. 직접 `lab-env`를 실행해도 MinIO prompt가 생기지 않도록 보완했다. |
-| 04 | ONNX v2/v1, Custom ServingRuntime·인증 starter, storage bridge | 교재 ModelCar V2 infer HTTP 200, 시험 입력 생성, runtime/auth starter dry-run 성공, 9개 항목 모두 의도된 초기 실패, cleanup 확인. |
-| 05 | 실제 GPU node 수 | `gpu_node_count=0`, `full_runtime_possible=false`; 의도된 Pending과 scheduler 진단 경로 확인. 가짜 GPU는 만들지 않음. |
-| 06 | `serving-modelregistry` 교재 Lab | Model Registry component `Managed`, `redhattraining-model-registry` `Available=True`, MariaDB/Registry Pod 실행 확인. CR API는 v1beta1, 실제 metadata REST는 Service `http-api`의 v1alpha3임을 실측했다. |
-| 07 | Chapter 05, Iris 기준 모델·client·reference | 교재 환경과 시험 namespace의 `iris-monitor`, runtime, client가 Ready 상태임을 확인. |
-| 08 | 합성 completions API, 고정 OpenBookQA/GPT-2 offline cache, 한국어·안전 Unitxt recipe | CDN에 의존하지 않고 baseline/optimized가 모두 `Complete/Succeeded`; custom 실행에서 OpenBookQA, `tr_0` 한국어, `tr_1` 안전 결과 JSON 생성 확인. |
-| 09 | vendor mock LLM, 쓰기 가능한 미완성 tool, RAG 앱, ACL 입력, 고정 verifier | 세 Deployment 1/1 Ready와 `genai-app` Route를 제공하되 답안 Role/RoleBinding/NetworkPolicy와 ACL·streaming·read-only 동작은 만들지 않는다. 실제 OVN egress에서는 DNS Service 53이 endpoint 5353으로 DNAT되므로 둘 다 제한적으로 허용해야 함을 verifier 실행으로 확인했다. |
-| 10 | current/previous 합성 모델, sample, lock, replay 코드, MinIO 사본 | ConfigMap 7개 입력과 전용 MinIO bucket 생성 확인. replay Job과 evidence는 응시자 작업으로 유지. |
+## 실제 실습 흐름 검증
 
-## 채점기 보강
+| 범위 | 확인 결과 |
+| --- | --- |
+| Task 01 | 플랫폼 상태는 읽기 전용으로 확인하고, 응시자 Group/Auth/RBAC/S3 작업만 점수에 반영됨을 확인했다. |
+| Task 02~04 | `start`가 입력 없이 환경을 준비하고 초기 답안은 0점이며, starter YAML의 server-side dry-run과 cleanup이 성공했다. |
+| Task 05 | GPU가 없는 환경에서는 Pending·scheduler 진단까지만 수행하며 가짜 GPU를 만들지 않는다. |
+| Task 06 | PVC와 인증된 전용 OCI Registry, kubelet pull Secret이 자동 준비되고 초기 채점은 0/30이었다. 두 ModelCar push/pull, 실제 REST metadata, Ready InferenceService를 만든 뒤 30/30을 확인했다. 존재하지 않는 정상 형식 digest는 06-2에서 실패했고, 원복 후 `finish`가 다시 30/30 및 cleanup을 완료했다. |
+| Task 07~08 | 제공 데이터·기준 서비스와 완료 상태 기반 채점 계약을 확인했다. |
+| Task 09 | 미완성 RAG baseline은 0/30이고, RBAC·제한 egress·고정 black-box verifier의 10개 동작 검증을 모두 만족하면 30/30임을 확인했다. `finish` cleanup도 확인했다. |
+| Task 10 | 제공 모델·sample·lock·replay 입력과 응시자 소유 evidence/rollback 계약을 분리했다. |
 
-- Task 04는 data connection의 `opendatahub.io/connection-path`와 RHOAI가 주입한 `model.storage.path`를 실제 저장 경로로 인정한다.
-- Task 05는 고정 digest·증적만으로 통과하지 않으며 실제 Ready vLLM workload를 요구한다.
-- Task 06은 환경의 Registry Available 상태를 점수로 주지 않는다. 실제 REST API의 `fraud-risk`, 1.0.0/1.1.0 ID, artifact URI/digest, metadata와 Registry ID 라벨이 연결된 Ready InferenceService를 직접 대조한다.
-- Task 08은 이름만 있는 두 CR이 아니라 결과가 존재하는 `Complete/Succeeded` LMEvalJob 두 개를 요구한다.
-- Task 09는 정확한 `rag-reader` rules, `rag-app` 전용 RoleBinding, 목적지가 제한된 Egress NetworkPolicy와 원본 checksum을 확인한 고정 black-box verifier Job 성공을 요구한다.
+## 주요 채점 방어
 
-## 안전한 실행 흐름
+- 환경의 Operator·Registry 설치 상태만으로 점수를 주지 않는다.
+- Task 01은 실제 Group label, Auth allow/admin group, RoleBinding과 제공 S3 값의 일치를 검사한다.
+- Task 06은 RHOAI REST의 model/version/artifact ID·metadata, 전용 OCI Registry의 두 실제 manifest digest, Registry ID 라벨이 연결된 Ready InferenceService를 직접 대조한다.
+- Task 09는 정확한 Role/RoleBinding/egress NetworkPolicy와 원본 checksum이 고정된 verifier Job의 실제 성공을 요구한다.
+- Secret, token, 원문 API 응답은 evidence ConfigMap에 저장하지 않는다.
 
-교재 Lab은 한 번에 하나만 실행한다.
+## 남은 물리적 제한
 
-```bash
-ai267 start 03
-ai267 inspect 03
-# 웹 문제를 직접 해결
-ai267 finish 03
-```
-
-`finish`는 만점일 때만 시험 namespace와 활성 Lab을 정리한다. 실패하면 수정할 수 있도록 그대로 보존한다. Task 01의 기존 사용자 작업은 이번 통합 검증에서 삭제하거나 초기화하지 않았다.
+GPU node가 없는 클러스터에서는 Task 05의 실제 vLLM GPU streaming과 성능 기준선만 완전 검증할 수 없다. 나머지 문제는 제공 Lab 또는 합성 데이터·서비스로 시작, 초기 실패, 정상 성공과 정리를 검증했다.
