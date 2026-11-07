@@ -26,13 +26,20 @@ case "${task}" in
     check_api services.platform.opendatahub.io auths 'OpenShift AI Auth CRD'
     lab_require_command python3
     rhoai_csv=$(oc get clusterserviceversion -A -o json 2>/dev/null \
-      | python3 -c 'import json,sys; items=json.load(sys.stdin).get("items",[]); print(next((i.get("status",{}).get("phase","") for i in items if "openshift ai" in i.get("spec",{}).get("displayName","").lower() or "rhods-operator" in i.get("metadata",{}).get("name","").lower()), "NOT FOUND"))' \
+      | python3 -c 'import json,sys; items=[i for i in json.load(sys.stdin).get("items",[]) if "openshift ai" in i.get("spec",{}).get("displayName","").lower() or "rhods-operator" in i.get("metadata",{}).get("name","").lower()]; good=[i["metadata"]["name"] for i in items if i.get("status",{}).get("phase")=="Succeeded"]; print("Succeeded: "+",".join(good) if good else (", ".join(i.get("metadata",{}).get("name","")+"="+i.get("status",{}).get("phase","UNKNOWN") for i in items) or "NOT FOUND"))' \
       2>/dev/null || printf 'UNKNOWN')
     dsc_ready=$(oc get datasciencecluster -o json 2>/dev/null \
-      | python3 -c 'import json,sys; items=json.load(sys.stdin).get("items",[]); print("READY" if any(any(c.get("type")=="Ready" and str(c.get("status","")).lower()=="true" for c in i.get("status",{}).get("conditions",[])) or any(str(c.get("managementState","")).lower()=="managed" for c in i.get("status",{}).get("components",{}).values()) for i in items) else "NOT READY")' \
+      | python3 -c 'import json,sys; items=json.load(sys.stdin).get("items",[]); good=[i.get("metadata",{}).get("name","") for i in items if any(c.get("type")=="Ready" and str(c.get("status","")).lower()=="true" for c in i.get("status",{}).get("conditions",[]))]; print("Ready: "+",".join(good) if good else "NOT READY")' \
       2>/dev/null || printf 'UNKNOWN')
+    dashboard_replicas=$(oc get deployment rhods-dashboard -n redhat-ods-applications \
+      -o jsonpath='{.status.availableReplicas}' 2>/dev/null || true)
     printf '%-32s %s\n' 'Red Hat OpenShift AI CSV' "${rhoai_csv}"
     printf '%-32s %s\n' 'DataScienceCluster state' "${dsc_ready}"
+    if [[ "${dashboard_replicas:-0}" =~ ^[0-9]+$ ]] && (( dashboard_replicas > 0 )); then
+      printf '%-32s %s\n' 'RHOAI Dashboard deployment' "READY (${dashboard_replicas} replicas)"
+    else
+      printf '%-32s %s\n' 'RHOAI Dashboard deployment' 'NOT READY'
+    fi
     ;;
   02)
     check_api kubeflow.org notebooks 'Kubeflow Notebook CRD'
@@ -51,8 +58,15 @@ case "${task}" in
   04|05) check_api serving.kserve.io inferenceservices 'KServe InferenceService CRD' ;;
   06)
     check_api modelregistry.opendatahub.io modelregistries 'Model Registry CRD'
-    registry_state=$(oc get datasciencecluster -o jsonpath='{.items[0].status.components.modelregistry.managementState}' 2>/dev/null || true)
-    printf '%-32s %s\n' 'Model Registry component' "${registry_state:-UNKNOWN}"
+    lab_require_command python3
+    registry_components=$(oc get datasciencecluster -o json 2>/dev/null \
+      | python3 -c 'import json,sys; items=json.load(sys.stdin).get("items",[]); values=[i.get("metadata",{}).get("name","")+"="+i.get("status",{}).get("components",{}).get("modelregistry",{}).get("managementState","UNKNOWN") for i in items]; print(", ".join(values) or "UNKNOWN")' \
+      2>/dev/null || printf 'UNKNOWN')
+    registry_instances=$(oc get modelregistries.modelregistry.opendatahub.io -A -o json 2>/dev/null \
+      | python3 -c 'import json,sys; items=json.load(sys.stdin).get("items",[]); values=[]; [(values.append(i.get("metadata",{}).get("namespace","")+"/"+i.get("metadata",{}).get("name","")+"="+("Available" if any(c.get("type")=="Available" and str(c.get("status","")).lower()=="true" for c in i.get("status",{}).get("conditions",[])) else "Not Available"))) for i in items]; print(", ".join(values) or "NONE")' \
+      2>/dev/null || printf 'UNKNOWN')
+    printf '%-32s %s\n' 'Model Registry components' "${registry_components}"
+    printf '%-32s %s\n' 'Model Registry instances' "${registry_instances}"
     ;;
   07) check_api trustyai.opendatahub.io trustyaiservices 'TrustyAIService CRD' ;;
   08) check_api trustyai.opendatahub.io lmevaljobs 'LMEvalJob CRD' ;;

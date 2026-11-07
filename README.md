@@ -1,6 +1,6 @@
 # EX267 v3.3 실습형 연습 환경
 
-웹 모의시험의 기존 10개 과제를 실제 OpenShift/OpenShift AI 리소스로 연습하기 위한 문제별 실습 묶음이다. 기존 문제를 삭제하거나 다른 문제로 교체하지 않고, AI267 3.3 교재 Lab과 공개 EX267-V2.13 디렉터리의 번호형 Markdown 34개를 준비 리소스·문제 지침·채점·정리에 모두 연결했다. 강의 시연과 달리 초기 상태를 일부러 미완성으로 만들고 응시자가 수정한 실제 결과를 자동 채점한다.
+웹 모의시험의 10개 과제를 실제 OpenShift/OpenShift AI 리소스로 연습하기 위한 문제별 실습 묶음이다. AI267 3.3 교재 Lab과 공개 EX267-V2.13 디렉터리의 번호형 Markdown 34개를 준비 리소스·문제 지침·채점·정리에 연결했다. 강의 시연과 달리 초기 상태를 일부러 미완성으로 만들고 응시자가 수정한 실제 결과를 자동 채점한다.
 
 - GitHub: https://github.com/myoh0623/AI267_labs
 
@@ -97,7 +97,7 @@ cd AI267_labs
 | 06 | 교재 Model Registry/MariaDB/OCI registry/ONNX 자산 |
 | 07 | Iris 기준 모델, client, versioned reference dataset |
 | 08 | baseline/optimized mock completions Service, OpenBookQA/GPT-2 offline cache, 한국어·안전 Unitxt recipe |
-| 09 | mock RAG 앱과 source/revision/ACL 계약 |
+| 09 | 쓰기 동작이 남은 mock RAG 앱, source/revision/ACL 계약, 고정 black-box verifier |
 | 10 | current/previous model, sample, lock, replay 코드와 MinIO 사본 |
 
 `exam-provided-*`는 시험지에서 주어지는 입력 자료에 해당한다. 이를 읽고 채점 대상 리소스에 반영하는 과정은 응시자의 작업이다.

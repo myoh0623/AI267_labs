@@ -20,7 +20,7 @@
 4. 프로젝트 범위에서 `developer1`과 `suraj`에는 `edit`, `rajan`과 `punit`에는 `admin`을 부여한다. 이 사용자들에게 `cluster-admin`은 부여하지 않는다.
 5. `fraud-s3`를 S3 data connection으로 완성한다. annotation은 `opendatahub.io/connection-type-protocol=s3`이고, 값은 `exam-provided-minio`의 실제 제공값이어야 한다.
 6. 제공 CSV를 `input/transactions.csv`로 업로드하고 고유 결과 object를 쓴다. 새 프로세스에서 두 object를 다시 읽어 각각 SHA-256을 계산한다.
-7. `identity-evidence`, `fraud-s3-evidence`의 TODO/false 값을 실제 관찰값으로 바꾼다.
+7. `fraud-s3-evidence`의 TODO/false 값을 실제 S3 read/write 관찰값으로 바꾼다. Group, Auth, RoleBinding은 채점기가 리소스를 직접 확인하므로 별도 identity 증적을 만들지 않는다.
 
 ## Console 위치
 

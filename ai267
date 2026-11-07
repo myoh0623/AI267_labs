@@ -106,9 +106,9 @@ case "${command}" in
     target=${2:-}
     [[ -n "${target}" ]] || { usage; exit 2; }
     target=$(normalize_task "${target}") || { usage; exit 2; }
-    "${EXAM_LAB}" preflight "${target}"
     load_minio_credentials "${target}"
     "${EXAM_LAB}" lab-env switch "${target}"
+    "${EXAM_LAB}" preflight "${target}"
     "${EXAM_LAB}" prepare "${target}"
     if [[ "${target}" == 01 || "${target}" == 02 || "${target}" == 03 || "${target}" == 04 || "${target}" == 08 || "${target}" == 10 ]]; then
       bash "${PROVIDE_MINIO}" "${target}"

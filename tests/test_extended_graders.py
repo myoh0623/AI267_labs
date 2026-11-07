@@ -31,6 +31,7 @@ class FixtureOc:
         self.objects = {}
         self.lists = {}
         self.all_lists = {}
+        self.raw_objects = {}
 
     def add(self, kind, name, value, namespace=None):
         self.objects[(kind, name, namespace)] = value
@@ -41,6 +42,9 @@ class FixtureOc:
     def add_all(self, kind, values):
         self.all_lists[kind] = values
 
+    def add_raw(self, path, value):
+        self.raw_objects[path] = value
+
     def get(self, kind, name, namespace=None):
         return self.objects.get((kind, name, namespace))
 
@@ -49,6 +53,9 @@ class FixtureOc:
 
     def list_all(self, kind):
         return self.all_lists.get(kind, [])
+
+    def raw_json(self, path):
+        return self.raw_objects.get(path)
 
 
 def cm(name, data):
@@ -88,13 +95,6 @@ def task01():
         "metadata": metadata("auth"),
         "spec": {"allowedGroups": ["devops-wala"], "adminGroups": ["rhoai-exam-admins"]},
     })
-    oc.add("configmap", "identity-evidence", cm("identity-evidence", {
-        "allowed_group": "devops-wala",
-        "admin_group": "rhoai-exam-admins",
-        "authenticated_wildcard_removed": "true",
-        "project_admin_users": "rajan,punit",
-        "project_edit_users": "developer1,suraj",
-    }), ns)
     oc.add("namespace", ns, {"metadata": metadata(ns, labels={
         "team": "northstar-risk", "environment": "exam"
     })})
@@ -108,6 +108,7 @@ def task01():
     s3 = secret("fraud-s3")
     s3["metadata"]["annotations"]["opendatahub.io/connection-type-protocol"] = "s3"
     oc.add("secret", "fraud-s3", s3, ns)
+    oc.add("secret", "exam-provided-minio", secret("exam-provided-minio"), ns)
     oc.add("configmap", "fraud-s3-evidence", cm("fraud-s3-evidence", {
         "input_key": "input/transactions.csv", "output_key": "output/result.json",
         "input_sha256": SHA, "output_sha256": SHA_B, "verified_from_new_process": "true",
@@ -299,18 +300,63 @@ def task04():
 def task06():
     oc = FixtureOc()
     ns = "ex267-t06-registry"
+    registry_ns = "rhoai-model-registries"
+    service = "redhattraining-model-registry"
+    api_path = "/api/model_registry/v1alpha3"
+    proxy = f"/api/v1/namespaces/{registry_ns}/services/{service}:http-api/proxy{api_path}"
+    properties = {
+        "git_revision": {"string_value": GIT},
+        "data_reference": {"string_value": "transactions-v1"},
+        "pipeline_run": {"string_value": "fraud-run-42"},
+        "metrics": {"string_value": "auc=0.94"},
+        "intended_use": {"string_value": "fraud screening"},
+        "limitations": {"string_value": "synthetic data"},
+        "owner": {"string_value": "northstar-risk"},
+        "approval": {"string_value": "approved"},
+    }
+    model = {"id": "model-42", "name": "fraud-risk", "owner": "northstar-risk",
+             "customProperties": properties}
+    version_1 = {"id": "version-100", "name": "1.0.0", "registeredModelId": "model-42"}
+    version_2 = {"id": "version-110", "name": "1.1.0", "registeredModelId": "model-42",
+                 "customProperties": properties}
+    artifact_1 = {"id": "artifact-100", "modelFormatName": "onnx",
+                  "uri": "oci://registry.lab.example.com:8443/redhattraining/models/fraud-risk@sha256:" + SHA}
+    artifact_2 = {"id": "artifact-110", "modelFormatName": "onnx",
+                  "uri": "oci://registry.lab.example.com:8443/redhattraining/models/fraud-risk@sha256:" + SHA_B}
+    oc.add("configmap", "exam-provided-registry-inputs", cm("exam-provided-registry-inputs", {
+        "registry_namespace": registry_ns, "registry_service": service,
+        "registry_service_port": "http-api", "registry_rest_api": api_path,
+        "registry_name": service,
+        "oci_registry": "registry.lab.example.com:8443",
+        "oci_repository": "redhattraining/models/fraud-risk",
+    }), ns)
+    oc.add_raw(proxy + "/registered_models", {"items": [model]})
+    oc.add_raw(proxy + "/registered_models/model-42/versions", {"items": [version_1, version_2]})
+    oc.add_raw(proxy + "/model_versions/version-100/artifacts", {"items": [artifact_1]})
+    oc.add_raw(proxy + "/model_versions/version-110/artifacts", {"items": [artifact_2]})
     oc.add("configmap", "registry-evidence", cm("registry-evidence", {
-        "model_id": "fraud-risk", "version_1_0_id": "version-100",
+        "model_id": "model-42", "version_1_0_id": "version-100",
         "version_1_1_id": "version-110", "oci_digest_1_0": SHA,
         "oci_digest_1_1": SHA_B, "pulled_artifact_sha256": SHA_C,
         "git_revision": GIT, "data_reference": "transactions-v1",
         "pipeline_run": "fraud-run-42", "format": "onnx",
         "metrics": "auc=0.94", "intended_use": "fraud screening",
         "limitations": "synthetic data", "owner": "northstar-risk",
-        "approval": "approved", "registry_endpoint": "https://registry.example",
-        "v1beta1_response_sha256": SHA, "deployed_version": "1.1.0",
+        "approval": "approved", "registry_api_path": api_path,
+        "registry_api_response_sha256": SHA, "deployed_version": "1.1.0",
         "deployment_artifact_digest": SHA_B,
     }), ns)
+    oc.add_list("inferenceservice", ns, [{
+        "metadata": metadata("fraud-risk", labels={
+            "modelregistry.opendatahub.io/registered-model-id": "model-42",
+            "modelregistry.opendatahub.io/model-version-id": "version-110",
+            "modelregistry.opendatahub.io/name": service,
+        }, annotations={"ex267.io/model-artifact-digest": "sha256:" + SHA_B}),
+        "spec": {"predictor": {"model": {
+            "storageUri": "oci://registry.lab.example.com:8443/redhattraining/models/fraud-risk@sha256:" + SHA_B,
+        }}},
+        "status": {"conditions": [{"type": "Ready", "status": "True"}]},
+    }])
     return oc, ns
 
 
@@ -329,12 +375,108 @@ def task09():
         "unauthorized_document": "pass", "malformed_tool_argument": "pass",
         "dependency_outage": "pass", "false_positive_test": "pass",
     }), ns)
-    oc.add_list("networkpolicy", ns, [{"metadata": metadata("rag-egress")}])
+    oc.add("role", "rag-reader", {
+        "metadata": metadata("rag-reader"),
+        "rules": [{
+            "apiGroups": [""], "resources": ["configmaps"],
+            "resourceNames": ["rag-documents"], "verbs": ["get"],
+        }],
+    }, ns)
+    oc.add_list("networkpolicy", ns, [{
+        "metadata": metadata("rag-egress"),
+        "spec": {
+            "podSelector": {"matchLabels": {"app": "genai-app"}},
+            "policyTypes": ["Egress"],
+            "egress": [
+                {"to": [{"podSelector": {"matchLabels": {"app": "mock-llm"}}}],
+                 "ports": [{"protocol": "TCP", "port": 8080}]},
+                {"to": [{"podSelector": {"matchLabels": {"app": "todo-tool"}}}],
+                 "ports": [{"protocol": "TCP", "port": 8080}]},
+                {"to": [{"namespaceSelector": {"matchLabels": {
+                    "kubernetes.io/metadata.name": "openshift-dns"
+                }}}], "ports": [{"protocol": "UDP", "port": 53},
+                                  {"protocol": "TCP", "port": 53}]},
+            ],
+        },
+    }])
     oc.add_list("rolebinding", ns, [{
-        "roleRef": {"name": "rag-reader"},
+        "roleRef": {"kind": "Role", "name": "rag-reader"},
         "subjects": [{"kind": "ServiceAccount", "name": "rag-app", "namespace": ns}],
     }])
+    verifier_source = (ROOT / "tasks" / "09-rag" / "inputs" / "verify_rag.py").read_text()
+    oc.add("configmap", "exam-provided-rag-verifier", cm(
+        "exam-provided-rag-verifier", {"verify_rag.py": verifier_source}
+    ), ns)
+    oc.add("job", "rag-contract-verification", {
+        "metadata": metadata("rag-contract-verification"),
+        "spec": {"template": {"spec": {
+            "containers": [{
+                "image": "registry.access.redhat.com/ubi9/python-312:9.6",
+                "command": ["python", "/verify/verify_rag.py"],
+                "volumeMounts": [{"name": "verifier", "mountPath": "/verify", "readOnly": True}],
+            }],
+            "volumes": [{"name": "verifier", "configMap": {
+                "name": "exam-provided-rag-verifier"
+            }}],
+        }}},
+        "status": {"succeeded": 1, "conditions": [{"type": "Complete", "status": "True"}]},
+    }, ns)
     return oc, ns
+
+
+def failed_checks(task, oc, namespace):
+    return {
+        item.check_id
+        for item in GRADE["GRADERS"][task](oc, namespace)
+        if not item.passed
+    }
+
+
+def negative_contracts():
+    oc, ns = task01()
+    oc.objects[("group", "devops-wala", None)]["metadata"]["labels"] = {}
+    assert "01-1" in failed_checks("01", oc, ns)
+
+    oc, ns = task01()
+    oc.objects[("auth.services.platform.opendatahub.io", "auth", None)]["spec"]["allowedGroups"].append(
+        "system:authenticated"
+    )
+    assert {"01-1", "01-7"}.issubset(failed_checks("01", oc, ns))
+
+    oc, ns = task01()
+    oc.lists[("rolebinding", ns)][0]["roleRef"]["name"] = "admin"
+    assert "01-3" in failed_checks("01", oc, ns)
+
+    oc, ns = task01()
+    oc.objects[("secret", "fraud-s3", ns)]["data"]["AWS_S3_BUCKET"] = encoded("wrong-bucket")
+    assert "01-5" in failed_checks("01", oc, ns)
+
+    oc, ns = task06()
+    oc.raw_objects.clear()
+    assert {"06-1", "06-2", "06-3", "06-4", "06-5"} == failed_checks("06", oc, ns)
+
+    oc, ns = task06()
+    oc.objects[("configmap", "registry-evidence", ns)]["data"]["model_id"] = "wrong-model"
+    assert "06-1" in failed_checks("06", oc, ns)
+
+    oc, ns = task06()
+    path = next(path for path in oc.raw_objects if path.endswith("version-110/artifacts"))
+    oc.raw_objects[path]["items"][0]["uri"] = "oci://wrong.example/model@sha256:" + SHA_B
+    assert "06-2" in failed_checks("06", oc, ns)
+
+    oc, ns = task09()
+    del oc.objects[("role", "rag-reader", ns)]
+    assert "09-2" in failed_checks("09", oc, ns)
+
+    oc, ns = task09()
+    oc.lists[("networkpolicy", ns)][0]["spec"]["egress"] = [{}]
+    assert "09-2" in failed_checks("09", oc, ns)
+
+    oc, ns = task09()
+    del oc.objects[("job", "rag-contract-verification", ns)]
+    assert {"09-3", "09-4", "09-5"}.issubset(failed_checks("09", oc, ns))
+
+    print("[validate] Task 01, 06, 09 negative grading contracts passed")
 
 
 def main():
@@ -347,6 +489,7 @@ def main():
         failed = [item.check_id for item in results if not item.passed]
         assert not failed, (task, failed)
         assert sum(item.points for item in results) == GRADE["TASKS"][task][1]
+    negative_contracts()
     print("[validate] candidate-owned Task 01-04, 06, 09 grader fixtures passed")
 
 

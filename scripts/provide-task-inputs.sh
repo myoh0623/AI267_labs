@@ -160,14 +160,27 @@ case "${task}" in
       -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || true)
     registry_namespace=$(oc get modelregistries.modelregistry.opendatahub.io -A \
       -o jsonpath='{.items[0].metadata.namespace}' 2>/dev/null || true)
-    registry_route=$(oc get route -n "${registry_namespace:-rhoai-model-registries}" \
-      -l app.kubernetes.io/name=model-registry -o jsonpath='{.items[0].spec.host}' 2>/dev/null || true)
+    registry_namespace=${registry_namespace:-rhoai-model-registries}
+    registry_service=$(oc get service -n "${registry_namespace}" \
+      -l component=model-registry -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || true)
+    registry_service=${registry_service:-${registry_name}}
+    [[ -n "${registry_name}" && -n "${registry_service}" ]] \
+      || lab_die '사용 가능한 Model Registry instance/service를 찾지 못했습니다.'
+    registry_port=$(oc get service "${registry_service}" -n "${registry_namespace}" \
+      -o jsonpath='{.spec.ports[?(@.port==8080)].name}' 2>/dev/null || true)
+    registry_port=${registry_port:-http-api}
+    registry_rest_api=/api/model_registry/v1alpha3
+    registry_proxy_prefix="/api/v1/namespaces/${registry_namespace}/services/${registry_service}:${registry_port}/proxy"
     model_root=${AI267_MODEL_REGISTRY_ASSETS:-${HOME}/course/labs/serving-modelregistry/models}
     [[ -d "${model_root}" ]] || lab_die "교재 Model Registry 모델이 없습니다: ${model_root}"
     oc create configmap exam-provided-registry-inputs -n "${namespace}" \
-      --from-literal=registry_name="${registry_name:-NOT_READY}" \
-      --from-literal=registry_namespace="${registry_namespace:-rhoai-model-registries}" \
-      --from-literal=registry_route="${registry_route:-discover-in-dashboard}" \
+      --from-literal=registry_name="${registry_name}" \
+      --from-literal=registry_namespace="${registry_namespace}" \
+      --from-literal=registry_service="${registry_service}" \
+      --from-literal=registry_service_port="${registry_port}" \
+      --from-literal=registry_service_url="http://${registry_service}.${registry_namespace}.svc:8080" \
+      --from-literal=registry_rest_api="${registry_rest_api}" \
+      --from-literal=registry_proxy_prefix="${registry_proxy_prefix}" \
       --from-literal=model_v1_path="${model_root}/v1" \
       --from-literal=model_v2_path="${model_root}/v2" \
       --from-literal=oci_registry='registry.lab.example.com:8443' \
@@ -202,7 +215,11 @@ case "${task}" in
       --from-literal=source_revision=synthetic-v1 \
       --from-literal=acl_contract='public:model-serving.md;restricted:rag-security.md' \
       --from-literal=embedding_revision=hash-embedding-v1 \
+      --from-literal=authorized_identity=security-reviewer \
+      --from-literal=unauthorized_identity=external-user \
       --dry-run=client -o yaml | oc apply -f - >/dev/null
+    create_file_configmap exam-provided-rag-verifier \
+      "${task_dir}/inputs/verify_rag.py" verify_rag.py
     ;;
   10)
     oc create configmap exam-provided-replay-inputs -n "${namespace}" \

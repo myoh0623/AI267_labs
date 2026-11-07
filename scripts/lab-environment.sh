@@ -126,7 +126,7 @@ run_chapter() {
     lab_die "교재 Lab 실행 파일을 찾을 수 없습니다: ${chapter_dir}/${script}"
   fi
 
-  lab_log "${chapter}: ${action} (시험 문제/namespace에는 변경 없음)"
+  lab_log "${chapter}: ${action} (시험 답안/namespace에는 변경 없음)"
   load_course_minio_credentials
   if [[ "${chapter}" == chapter-02-workbench && "${action}" == prepare ]] \
     && ! oc whoami -t >/dev/null 2>&1; then
@@ -205,7 +205,7 @@ if [[ "${action}" == switch ]]; then
   if [[ -n "${course_lab}" ]] && ! course_lab_is_started "${course_lab}"; then
     command -v lab >/dev/null 2>&1 \
       || lab_die "교재 Lab 명령을 찾을 수 없습니다: lab start ${course_lab}"
-    lab_log "${course_lab}: start (시험 문제/namespace에는 변경 없음)"
+    lab_log "${course_lab}: start (시험 답안/namespace에는 변경 없음)"
     (cd "${HOME}" && lab start "${course_lab}")
   fi
   if (( ${#chapters[@]} == 0 )) && [[ -z "${course_lab}" ]]; then

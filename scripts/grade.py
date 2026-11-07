@@ -9,6 +9,7 @@ from __future__ import annotations
 import argparse
 import base64
 from dataclasses import asdict, dataclass
+import hashlib
 import json
 import re
 import subprocess
@@ -33,6 +34,8 @@ SHA256 = re.compile(r"^(?:sha256:)?[0-9a-f]{64}$")
 GIT_SHA = re.compile(r"^[0-9a-f]{40}$")
 PINNED_IMAGE = re.compile(r"@sha256:[0-9a-f]{64}$")
 TODO_VALUES = {"", "todo", "replace_me", "replace-me", "pending", "unknown", "n/a"}
+RAG_VERIFIER_SHA256 = "748680af31b40caa35d09bd660034a660e48602be19097904200e429b464edcf"
+RAG_VERIFIER_IMAGE = "registry.access.redhat.com/ubi9/python-312:9.6"
 
 
 @dataclass
@@ -84,6 +87,15 @@ class Oc:
             return json.loads(result.stdout).get("items", [])
         except json.JSONDecodeError:
             return []
+
+    def raw_json(self, path: str) -> dict[str, Any] | None:
+        result = self.run("get", "--raw", path)
+        if result.returncode != 0:
+            return None
+        try:
+            return json.loads(result.stdout)
+        except json.JSONDecodeError:
+            return None
 
 
 def dig(value: Any, *path: Any, default: Any = None) -> Any:
@@ -146,6 +158,23 @@ def secret_values_are_real(secret: dict[str, Any] | None, keys: list[str]) -> bo
     return True
 
 
+def secret_data_matches(
+    actual: dict[str, Any] | None,
+    expected: dict[str, Any] | None,
+    keys: list[str],
+) -> bool:
+    """Compare encoded Secret values without decoding or printing credentials."""
+    if not actual or not expected:
+        return False
+    actual_data = actual.get("data", {}) or {}
+    expected_data = expected.get("data", {}) or {}
+    return all(
+        non_todo(actual_data.get(key))
+        and actual_data.get(key) == expected_data.get(key)
+        for key in keys
+    )
+
+
 def result(check_id: str, description: str, points: int, passed: bool, detail: str) -> Result:
     return Result(check_id, description, points, bool(passed), detail)
 
@@ -159,7 +188,6 @@ def grade_01(oc: Oc, ns: str) -> list[Result]:
         or oc.get("auth.services.platform.opendatahub.io", "auth", "redhat-ods-applications")
     allowed_groups = set(dig(auth, "spec", "allowedGroups", default=[]) or [])
     admin_groups = set(dig(auth, "spec", "adminGroups", default=[]) or [])
-    identity = cm_data(oc, "identity-evidence", ns)
     managed_groups = all(
         dig(group, "metadata", "labels", "ex267.practice/task", default="") == "01"
         for group in (user_group, admin_group) if group
@@ -169,8 +197,7 @@ def grade_01(oc: Oc, ns: str) -> list[Result]:
         and "devops-wala" in allowed_groups \
         and "rhoai-exam-admins" in admin_groups \
         and "system:authenticated" not in allowed_groups \
-        and managed_groups \
-        and identity.get("authenticated_wildcard_removed", "").lower() == "true"
+        and managed_groups
 
     namespace = oc.get("namespace", ns)
     labels = dig(namespace, "metadata", "labels", default={}) or {}
@@ -188,26 +215,24 @@ def grade_01(oc: Oc, ns: str) -> list[Result]:
     r4 = "edit" in developer_roles and not ({"admin", "cluster-admin"} & set(developer_roles))
     r5 = all("admin" in roles_by_user.get(name, []) for name in ("rajan", "punit")) \
         and "edit" in roles_by_user.get("suraj", []) \
-        and not any("cluster-admin" in roles_by_user.get(name, []) for name in ("rajan", "punit", "suraj")) \
-        and identity.get("project_admin_users") == "rajan,punit" \
-        and identity.get("project_edit_users") == "developer1,suraj"
+        and not any("cluster-admin" in roles_by_user.get(name, []) for name in ("rajan", "punit", "suraj"))
 
     connection = oc.get("secret", "fraud-s3", ns)
+    provided_connection = oc.get("secret", "exam-provided-minio", ns)
     annotation = dig(connection, "metadata", "annotations", "opendatahub.io/connection-type-protocol")
-    r6 = annotation == "s3" and secret_values_are_real(
-        connection,
-        ["AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_S3_ENDPOINT", "AWS_S3_BUCKET"],
-    )
+    s3_keys = ["AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_S3_ENDPOINT", "AWS_S3_BUCKET"]
+    r6 = annotation == "s3" \
+        and secret_values_are_real(connection, s3_keys) \
+        and secret_data_matches(connection, provided_connection, s3_keys)
 
     evidence = cm_data(oc, "fraud-s3-evidence", ns)
     r7 = has_values(evidence, ["input_key", "output_key", "input_sha256", "output_sha256", "verified_from_new_process"]) \
         and is_sha(evidence.get("input_sha256")) and is_sha(evidence.get("output_sha256")) \
+        and evidence.get("input_key") != evidence.get("output_key") \
         and evidence.get("verified_from_new_process", "").lower() == "true"
 
     r8 = bool(auth) and allowed_groups == {"devops-wala"} \
-        and admin_groups == {"rhoai-exam-admins"} \
-        and identity.get("allowed_group") == "devops-wala" \
-        and identity.get("admin_group") == "rhoai-exam-admins"
+        and admin_groups == {"rhoai-exam-admins"}
 
     return [
         result("01-1", "사용자·관리자 그룹 구성과 Auth 연결", 3, r2, f"users={sorted(user_members)}, admins={sorted(admin_members)}"),
@@ -574,25 +599,140 @@ def grade_05(oc: Oc, ns: str) -> list[Result]:
     ]
 
 
+def registry_resources(oc: Oc, ns: str) -> dict[str, Any]:
+    inputs = cm_data(oc, "exam-provided-registry-inputs", ns)
+    registry_namespace = inputs.get("registry_namespace", "")
+    service = inputs.get("registry_service", "")
+    port = inputs.get("registry_service_port", "http-api")
+    api_path = inputs.get("registry_rest_api", "")
+    if not all(non_todo(value) for value in (registry_namespace, service, port, api_path)):
+        return {}
+
+    proxy = (
+        f"/api/v1/namespaces/{registry_namespace}/services/"
+        f"{service}:{port}/proxy{api_path}"
+    )
+    model_list = oc.raw_json(f"{proxy}/registered_models") or {}
+    model = next(
+        (item for item in model_list.get("items", []) if item.get("name") == "fraud-risk"),
+        None,
+    )
+    if not model or not non_todo(model.get("id")):
+        return {"inputs": inputs, "api_path": api_path, "proxy": proxy}
+
+    versions_list = oc.raw_json(
+        f"{proxy}/registered_models/{model['id']}/versions"
+    ) or {}
+    versions = {
+        item.get("name"): item
+        for item in versions_list.get("items", [])
+        if item.get("name") in {"1.0.0", "1.1.0"}
+    }
+    artifacts: dict[str, list[dict[str, Any]]] = {}
+    for version_name, version in versions.items():
+        version_id = version.get("id")
+        response = oc.raw_json(f"{proxy}/model_versions/{version_id}/artifacts") or {}
+        artifacts[version_name] = response.get("items", []) or []
+    return {
+        "inputs": inputs,
+        "api_path": api_path,
+        "proxy": proxy,
+        "model": model,
+        "versions": versions,
+        "artifacts": artifacts,
+    }
+
+
+def registry_metadata_matches(
+    evidence: dict[str, str],
+    model: dict[str, Any],
+    version: dict[str, Any],
+    artifacts: list[dict[str, Any]],
+) -> bool:
+    combined = json.dumps([model, version, *artifacts], ensure_ascii=False, sort_keys=True)
+    for key in (
+        "git_revision", "data_reference", "pipeline_run", "metrics",
+        "intended_use", "limitations", "owner", "approval",
+    ):
+        value = evidence.get(key)
+        if not non_todo(value) or key not in combined or str(value) not in combined:
+            return False
+    expected_format = str(evidence.get("format", "")).lower()
+    return non_todo(expected_format) and any(
+        str(item.get("modelFormatName", "")).lower() == expected_format
+        for item in artifacts
+    )
+
+
+def artifact_has_digest(
+    artifacts: list[dict[str, Any]],
+    digest: str,
+    repository: str,
+) -> bool:
+    normalized = str(digest or "").removeprefix("sha256:")
+    return non_todo(repository) and is_sha(digest) and any(
+        normalized in str(item.get("uri", "")).lower()
+        and repository in str(item.get("uri", ""))
+        for item in artifacts
+    )
+
+
 def grade_06(oc: Oc, ns: str) -> list[Result]:
     evidence = cm_data(oc, "registry-evidence", ns)
+    live = registry_resources(oc, ns)
+    model = live.get("model") or {}
+    versions = live.get("versions") or {}
+    version_1_0 = versions.get("1.0.0") or {}
+    version_1_1 = versions.get("1.1.0") or {}
+    artifacts = live.get("artifacts") or {}
     r1 = has_values(evidence, ["model_id", "version_1_0_id", "version_1_1_id"]) \
-        and evidence.get("version_1_0_id") != evidence.get("version_1_1_id")
-    r2 = is_sha(evidence.get("oci_digest_1_0")) and is_sha(evidence.get("oci_digest_1_1")) \
+        and str(evidence.get("model_id")) == str(model.get("id")) \
+        and str(evidence.get("version_1_0_id")) == str(version_1_0.get("id")) \
+        and str(evidence.get("version_1_1_id")) == str(version_1_1.get("id")) \
+        and str(version_1_0.get("id")) != str(version_1_1.get("id"))
+
+    inputs = live.get("inputs") or {}
+    repository = "/".join(filter(None, [
+        str(inputs.get("oci_registry", "")).rstrip("/"),
+        str(inputs.get("oci_repository", "")).lstrip("/"),
+    ]))
+    r2 = artifact_has_digest(
+        artifacts.get("1.0.0", []), evidence.get("oci_digest_1_0", ""), repository
+    ) and artifact_has_digest(
+        artifacts.get("1.1.0", []), evidence.get("oci_digest_1_1", ""), repository
+    ) \
         and evidence.get("oci_digest_1_0") != evidence.get("oci_digest_1_1") \
         and is_sha(evidence.get("pulled_artifact_sha256"))
-    r3 = has_values(evidence, ["git_revision", "data_reference", "pipeline_run", "format", "metrics", "intended_use", "limitations", "owner", "approval"])
-    r4 = has_values(evidence, ["v1beta1_response_sha256", "registry_endpoint"]) and is_sha(evidence.get("v1beta1_response_sha256"))
+    r3 = registry_metadata_matches(
+        evidence, model, version_1_1, artifacts.get("1.1.0", [])
+    )
+    r4 = evidence.get("registry_api_path") == "/api/model_registry/v1alpha3" \
+        and live.get("api_path") == evidence.get("registry_api_path") \
+        and is_sha(evidence.get("registry_api_response_sha256")) \
+        and bool(model)
+
+    deployments = oc.list("inferenceservice", ns)
+    approved_digest = str(evidence.get("oci_digest_1_1", "")).removeprefix("sha256:")
+    matching_deployments = [
+        item for item in deployments
+        if condition_true(item)
+        and approved_digest
+        and approved_digest in json.dumps(item, sort_keys=True).lower()
+        and str(dig(item, "metadata", "labels", "modelregistry.opendatahub.io/registered-model-id", default="")) == str(model.get("id", ""))
+        and str(dig(item, "metadata", "labels", "modelregistry.opendatahub.io/model-version-id", default="")) == str(version_1_1.get("id", ""))
+        and str(dig(item, "metadata", "labels", "modelregistry.opendatahub.io/name", default="")) == str(inputs.get("registry_name", ""))
+    ]
     r5 = evidence.get("deployed_version") == "1.1.0" \
         and is_sha(evidence.get("deployment_artifact_digest")) \
-        and str(evidence.get("deployment_artifact_digest", "")).removeprefix("sha256:") == str(evidence.get("oci_digest_1_1", "")).removeprefix("sha256:")
+        and str(evidence.get("deployment_artifact_digest", "")).removeprefix("sha256:") == approved_digest \
+        and bool(matching_deployments)
 
     return [
         result("06-1", "fraud-risk identity·두 version", 6, r1, "model_id + 서로 다른 version ID"),
         result("06-2", "서로 다른 OCI digest·pull checksum", 6, r2, "digest 값은 유효성만 검사"),
         result("06-3", "계보 metadata 완성", 6, r3, "source/data/run/metrics/use/approval"),
-        result("06-4", "v1beta1 API 응답 증적", 6, r4, "v1beta1_response_sha256"),
-        result("06-5", "1.1.0 exact artifact 배포 연결", 6, r5, "deployed_version=1.1.0"),
+        result("06-4", "REST v1alpha3 API 응답 증적", 6, r4, "registry_api_response_sha256"),
+        result("06-5", "1.1.0 exact artifact Ready 배포 연결", 6, r5, f"matching Ready deployments={len(matching_deployments)}"),
     ]
 
 
@@ -659,32 +799,103 @@ def deployment_ready(deployment: dict[str, Any] | None) -> bool:
 def grade_09(oc: Oc, ns: str) -> list[Result]:
     evidence = cm_data(oc, "rag-evidence", ns)
     r2 = has_values(evidence, ["source_id", "source_revision", "document_acl", "embedding_model_revision", "index_digest"]) and is_sha(evidence.get("index_digest"))
+
+    role = oc.get("role", "rag-reader", ns)
+    role_rules = (role or {}).get("rules", []) or []
+    role_ok = len(role_rules) == 1 and all(
+        set(rule.get("apiGroups", []) or []) == {""}
+        and set(rule.get("resources", []) or []) == {"configmaps"}
+        and set(rule.get("resourceNames", []) or []) == {"rag-documents"}
+        and set(rule.get("verbs", []) or []) == {"get"}
+        for rule in role_rules
+    )
     network_policies = oc.list("networkpolicy", ns)
     rolebindings = oc.list("rolebinding", ns)
-    r3 = bool(network_policies) and any(
-        dig(binding, "roleRef", "name") not in {"admin", "cluster-admin"}
+    def exact_rag_binding(binding: dict[str, Any]) -> bool:
+        subjects = binding.get("subjects", []) or []
+        return dig(binding, "roleRef", "kind") == "Role" \
+            and dig(binding, "roleRef", "name") == "rag-reader" \
+            and len(subjects) == 1 \
+            and subjects[0].get("kind") == "ServiceAccount" \
+            and subjects[0].get("name") == "rag-app" \
+            and subjects[0].get("namespace", ns) == ns \
+            and subjects[0].get("apiGroup", "") == ""
+
+    binding_ok = any(exact_rag_binding(binding) for binding in rolebindings)
+
+    def restricted_egress(policy: dict[str, Any]) -> bool:
+        spec = policy.get("spec", {}) or {}
+        if dig(spec, "podSelector", "matchLabels", "app") != "genai-app":
+            return False
+        if "Egress" not in (spec.get("policyTypes", []) or []):
+            return False
+        egress = spec.get("egress", []) or []
+        if not egress:
+            return False
+        destinations: set[str] = set()
+        dns_ok = False
+        for rule in egress:
+            peers = rule.get("to", []) or []
+            ports = rule.get("ports", []) or []
+            if not peers or not ports:
+                return False
+            for peer in peers:
+                if not peer or dig(peer, "ipBlock", "cidr") in {"0.0.0.0/0", "::/0"}:
+                    return False
+                app = dig(peer, "podSelector", "matchLabels", "app")
+                if app:
+                    if app not in {"mock-llm", "todo-tool"} \
+                            or any(str(port.get("port")) != "8080" or port.get("protocol", "TCP") != "TCP" for port in ports):
+                        return False
+                    destinations.add(app)
+                    continue
+                namespace_name = dig(
+                    peer, "namespaceSelector", "matchLabels", "kubernetes.io/metadata.name"
+                )
+                if namespace_name != "openshift-dns" \
+                        or any(str(port.get("port")) != "53" for port in ports):
+                    return False
+                dns_ok = True
+        return destinations == {"mock-llm", "todo-tool"} and dns_ok
+
+    network_ok = any(restricted_egress(policy) for policy in network_policies)
+    r3 = role_ok and binding_ok and network_ok
+
+    verifier_cm = oc.get("configmap", "exam-provided-rag-verifier", ns)
+    verifier_source = dig(verifier_cm, "data", "verify_rag.py", default="")
+    verifier_hash_ok = hashlib.sha256(verifier_source.encode()).hexdigest() == RAG_VERIFIER_SHA256
+    verifier_job = oc.get("job", "rag-contract-verification", ns)
+    job_container = dig(verifier_job, "spec", "template", "spec", "containers", 0, default={}) or {}
+    job_volumes = dig(verifier_job, "spec", "template", "spec", "volumes", default=[]) or []
+    verifier_job_ok = completed_job(verifier_job) \
+        and verifier_hash_ok \
+        and job_container.get("image") == RAG_VERIFIER_IMAGE \
+        and job_container.get("command") == ["python", "/verify/verify_rag.py"] \
         and any(
-            subject.get("kind") == "ServiceAccount"
-            and subject.get("name") == "rag-app"
-            and subject.get("namespace", ns) == ns
-            for subject in (binding.get("subjects", []) or [])
+            volume.get("configMap", {}).get("name") == "exam-provided-rag-verifier"
+            for volume in job_volumes
+        ) \
+        and any(
+            mount.get("mountPath") == "/verify" and mount.get("readOnly") is True
+            for mount in (job_container.get("volumeMounts", []) or [])
         )
-        for binding in rolebindings
-    )
     r4 = evidence.get("unauthorized_retrieval_count") == "0" \
         and evidence.get("stream_http", "").startswith("2") \
-        and has_values(evidence, ["citation_response_sha256"])
+        and has_values(evidence, ["citation_response_sha256"]) \
+        and verifier_job_ok
     r5 = has_values(evidence, ["tool_schema_sha256", "tool_timeout_seconds", "tool_step_limit", "tool_audit_sha256"]) \
-        and evidence.get("tool_read_only", "").lower() == "true"
+        and evidence.get("tool_read_only", "").lower() == "true" \
+        and verifier_job_ok
     r6 = has_values(evidence, ["direct_injection", "indirect_injection", "unauthorized_document", "malformed_tool_argument", "dependency_outage", "false_positive_test"]) \
-        and all(evidence.get(key, "").lower() == "pass" for key in ["direct_injection", "indirect_injection", "unauthorized_document", "malformed_tool_argument", "dependency_outage", "false_positive_test"])
+        and all(evidence.get(key, "").lower() == "pass" for key in ["direct_injection", "indirect_injection", "unauthorized_document", "malformed_tool_argument", "dependency_outage", "false_positive_test"]) \
+        and verifier_job_ok
 
     return [
         result("09-1", "버전된 ingestion·ACL·index digest", 6, r2, "rag-evidence ConfigMap"),
-        result("09-2", "retrieval 전 권한 경계·최소 권한", 6, r3, f"NetworkPolicies={len(network_policies)}"),
-        result("09-3", "unauthorized=0·streaming·citation", 6, r4, "rag-evidence ConfigMap"),
-        result("09-4", "read-only typed tool·timeout·audit", 6, r5, "rag-evidence ConfigMap"),
-        result("09-5", "주입·권한·오류·장애 시험", 6, r6, "6-case matrix"),
+        result("09-2", "retrieval 전 권한 경계·최소 권한", 6, r3, f"Role={role_ok}, RoleBinding={binding_ok}, NetworkPolicy={network_ok}"),
+        result("09-3", "unauthorized=0·streaming·citation", 6, r4, f"fixed verifier Job={verifier_job_ok}"),
+        result("09-4", "read-only typed tool·timeout·audit", 6, r5, f"fixed verifier Job={verifier_job_ok}"),
+        result("09-5", "주입·권한·오류·장애 시험", 6, r6, f"6-case fixed verifier Job={verifier_job_ok}"),
     ]
 
 

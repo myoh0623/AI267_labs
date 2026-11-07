@@ -1,6 +1,6 @@
 # 교재 Lab 기반 시험 환경
 
-이 기능은 기존 10개 문제를 다른 문제로 교체하지 않는다. 교재의 검증된 예제를 별도 `ai267-chXX-*` namespace에 준비하고, EX267-V2.13 번호형 실습의 누락된 학습 행동은 기존 Task 01~04의 추가 채점 항목으로 연결한다. 응시자는 OpenShift AI 3.3의 정상 리소스 형태와 동작을 확인한 다음 `ex267-*` 시험 namespace에서 직접 문제를 푼다.
+교재의 검증된 예제를 별도 `ai267-chXX-*` namespace에 준비하고, EX267-V2.13 번호형 실습의 학습 행동은 Task 01~04의 채점 항목으로 연결한다. 응시자는 OpenShift AI 3.3의 정상 리소스 형태와 동작을 확인한 다음 `ex267-*` 시험 namespace에서 직접 문제를 푼다.
 
 ## 사용 순서
 
@@ -55,7 +55,7 @@ Task 01·02·03·04·08·10에는 문제 전용 bucket과 `exam-provided-minio`�
 | 06 | `serving-modelregistry` | Registry component, MariaDB, ONNX v1/v2와 OCI registry |
 | 07 | Chapter 05 | TrustyAI capture, reference data, drift request의 정상 예시 |
 | 08 | Chapter 08 | CPU 양자화 결과와 LMEvalJob server-side schema 검증 |
-| 09 | Chapter 09 | mock LLM, RAG, read-only tool, guardrail의 정상 예시 |
+| 09 | Chapter 09 | mock LLM, ACL/streaming 미완성 RAG, 쓰기 tool을 강화하는 기준 환경 |
 
 Task 05는 물리 GPU가 필요하므로 교재 환경으로 GPU를 대신 만들지 않는다. Task 06은 `lab start serving-modelregistry`를 사용해 현재 클러스터에서 비활성화된 component를 교재 기준으로 활성화한다. Task 10은 앞선 문제의 결과를 연결하는 통합 과제라 별도 교재 Lab 대신 합성 replay artifact를 제공한다.
 

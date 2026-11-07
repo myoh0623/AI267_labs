@@ -64,16 +64,4 @@ data:
   input_sha256: TODO
   output_sha256: TODO
   verified_from_new_process: "false"
----
-apiVersion: v1
-kind: ConfigMap
-metadata:
-  name: identity-evidence
-  namespace: ex267-fraud
-data:
-  allowed_group: TODO
-  admin_group: TODO
-  authenticated_wildcard_removed: "false"
-  project_admin_users: TODO
-  project_edit_users: TODO
 

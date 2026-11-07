@@ -39,8 +39,8 @@ data:
   limitations: TODO
   owner: TODO
   approval: TODO
-  registry_endpoint: TODO
-  v1beta1_response_sha256: TODO
+  registry_api_path: TODO
+  registry_api_response_sha256: TODO
   deployed_version: TODO
   deployment_artifact_digest: TODO
 

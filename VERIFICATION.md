@@ -2,8 +2,9 @@
 
 기준 클러스터 검증일: 2026-11-05 (Asia/Seoul)<br>
 번호형 실습 완전 반영 검증일: 2026-11-06 (Asia/Seoul)
+채점 계약 재검증일: 2026-11-07 (Asia/Seoul)
 
-대상: `student@100.94.27.27`, OpenShift 4.20.14 / OpenShift AI 3.3.1
+대상: 전용 AI267 실습 클러스터, OpenShift 4.20.14 / OpenShift AI 3.3.1
 
 ## 결론
 
@@ -24,19 +25,19 @@
 | 03 | Chapter 06, KFP·Elyra 소스, 합성 CSV, DB Secret | 교재 DSPA Ready와 Workflow Succeeded, 시험 입력 생성, Elyra starter dry-run 성공, 9개 항목 모두 의도된 초기 실패, cleanup 확인. 직접 `lab-env`를 실행해도 MinIO prompt가 생기지 않도록 보완했다. |
 | 04 | ONNX v2/v1, Custom ServingRuntime·인증 starter, storage bridge | 교재 ModelCar V2 infer HTTP 200, 시험 입력 생성, runtime/auth starter dry-run 성공, 9개 항목 모두 의도된 초기 실패, cleanup 확인. |
 | 05 | 실제 GPU node 수 | `gpu_node_count=0`, `full_runtime_possible=false`; 의도된 Pending과 scheduler 진단 경로 확인. 가짜 GPU는 만들지 않음. |
-| 06 | `serving-modelregistry` 교재 Lab | Model Registry component `Managed`, `redhattraining-model-registry` `Available=True`, MariaDB/Registry Pod 실행 확인. |
+| 06 | `serving-modelregistry` 교재 Lab | Model Registry component `Managed`, `redhattraining-model-registry` `Available=True`, MariaDB/Registry Pod 실행 확인. CR API는 v1beta1, 실제 metadata REST는 Service `http-api`의 v1alpha3임을 실측했다. |
 | 07 | Chapter 05, Iris 기준 모델·client·reference | 교재 환경과 시험 namespace의 `iris-monitor`, runtime, client가 Ready 상태임을 확인. |
 | 08 | 합성 completions API, 고정 OpenBookQA/GPT-2 offline cache, 한국어·안전 Unitxt recipe | CDN에 의존하지 않고 baseline/optimized가 모두 `Complete/Succeeded`; custom 실행에서 OpenBookQA, `tr_0` 한국어, `tr_1` 안전 결과 JSON 생성 확인. |
-| 09 | vendor mock LLM, read-only tool, RAG 앱, ACL 입력 | 세 Deployment 1/1 Ready, `genai-app` Route 생성 확인. namespace 생성 직후 조회 경합에는 상태 재시도를 추가. |
+| 09 | vendor mock LLM, 쓰기 가능한 미완성 tool, RAG 앱, ACL 입력, 고정 verifier | 세 Deployment 1/1 Ready와 `genai-app` Route를 제공하되 답안 Role/RoleBinding/NetworkPolicy와 ACL·streaming·read-only 동작은 만들지 않는다. |
 | 10 | current/previous 합성 모델, sample, lock, replay 코드, MinIO 사본 | ConfigMap 7개 입력과 전용 MinIO bucket 생성 확인. replay Job과 evidence는 응시자 작업으로 유지. |
 
 ## 채점기 보강
 
 - Task 04는 data connection의 `opendatahub.io/connection-path`와 RHOAI가 주입한 `model.storage.path`를 실제 저장 경로로 인정한다.
 - Task 05는 고정 digest·증적만으로 통과하지 않으며 실제 Ready vLLM workload를 요구한다.
-- Task 06은 실행 중인 Available Model Registry가 있어야 첫 항목을 통과한다.
+- Task 06은 환경의 Registry Available 상태를 점수로 주지 않는다. 실제 REST API의 `fraud-risk`, 1.0.0/1.1.0 ID, artifact URI/digest, metadata와 Registry ID 라벨이 연결된 Ready InferenceService를 직접 대조한다.
 - Task 08은 이름만 있는 두 CR이 아니라 결과가 존재하는 `Complete/Succeeded` LMEvalJob 두 개를 요구한다.
-- Task 09는 임의 RoleBinding이 아니라 `rag-app` ServiceAccount에 연결된 비관리자 RoleBinding과 NetworkPolicy를 요구한다.
+- Task 09는 정확한 `rag-reader` rules, `rag-app` 전용 RoleBinding, 목적지가 제한된 Egress NetworkPolicy와 원본 checksum을 확인한 고정 black-box verifier Job 성공을 요구한다.
 
 ## 안전한 실행 흐름
 
