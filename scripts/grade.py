@@ -12,9 +12,13 @@ from dataclasses import asdict, dataclass
 import hashlib
 import json
 import re
+import ssl
 import subprocess
 import sys
 from typing import Any, Callable
+import urllib.error
+import urllib.parse
+import urllib.request
 
 
 TASKS = {
@@ -96,6 +100,74 @@ class Oc:
             return json.loads(result.stdout)
         except json.JSONDecodeError:
             return None
+
+    def registry_manifest_exists(
+        self,
+        registry: str,
+        repository: str,
+        digest: str,
+        username: str,
+        password: str,
+    ) -> bool:
+        """Verify an exact manifest digest without logging Registry credentials."""
+        registry = str(registry or "").strip().rstrip("/")
+        if "://" not in registry:
+            registry = f"https://{registry}"
+        parsed = urllib.parse.urlsplit(registry)
+        if parsed.scheme != "https" or not parsed.hostname \
+                or parsed.username or parsed.password \
+                or parsed.path not in ("", "/") or parsed.query or parsed.fragment:
+            return False
+
+        repository = str(repository or "").strip().strip("/")
+        if not re.fullmatch(
+            r"[a-z0-9]+(?:[._-][a-z0-9]+)*(?:/[a-z0-9]+(?:[._-][a-z0-9]+)*)*",
+            repository,
+        ):
+            return False
+        normalized = str(digest or "").strip().lower().removeprefix("sha256:")
+        if not re.fullmatch(r"[0-9a-f]{64}", normalized):
+            return False
+        expected = f"sha256:{normalized}"
+
+        quoted_repository = urllib.parse.quote(repository, safe="/")
+        url = f"{parsed.scheme}://{parsed.netloc}/v2/{quoted_repository}/manifests/{expected}"
+        token = base64.b64encode(f"{username}:{password}".encode()).decode("ascii")
+        request = urllib.request.Request(url, headers={
+            "Accept": ", ".join([
+                "application/vnd.oci.image.manifest.v1+json",
+                "application/vnd.oci.image.index.v1+json",
+                "application/vnd.docker.distribution.manifest.v2+json",
+                "application/vnd.docker.distribution.manifest.list.v2+json",
+            ]),
+            "Authorization": f"Basic {token}",
+        })
+
+        class NoRedirect(urllib.request.HTTPRedirectHandler):
+            def redirect_request(self, req, fp, code, msg, headers, newurl):
+                return None
+
+        # The lab Route uses the cluster's practice certificate. Keep the request
+        # HTTPS-only, disable redirects/proxies, and never expose response errors.
+        context = ssl.create_default_context()
+        context.check_hostname = False
+        context.verify_mode = ssl.CERT_NONE
+        opener = urllib.request.build_opener(
+            urllib.request.ProxyHandler({}),
+            urllib.request.HTTPSHandler(context=context),
+            NoRedirect(),
+        )
+        try:
+            with opener.open(request, timeout=10) as response:
+                body = response.read(8 * 1024 * 1024 + 1)
+                if response.status != 200 or len(body) > 8 * 1024 * 1024:
+                    return False
+                response_digest = str(response.headers.get("Docker-Content-Digest", "")).lower()
+        except (OSError, ValueError, urllib.error.URLError):
+            return False
+
+        body_digest = f"sha256:{hashlib.sha256(body).hexdigest()}"
+        return body_digest == expected and response_digest in ("", expected)
 
 
 def dig(value: Any, *path: Any, default: Any = None) -> Any:
@@ -670,11 +742,47 @@ def artifact_has_digest(
     repository: str,
 ) -> bool:
     normalized = str(digest or "").removeprefix("sha256:")
+    expected_uri = f"oci://{repository}@sha256:{normalized}"
     return non_todo(repository) and is_sha(digest) and any(
-        normalized in str(item.get("uri", "")).lower()
-        and repository in str(item.get("uri", ""))
+        str(item.get("uri", "")).strip().lower() == expected_uri.lower()
         for item in artifacts
     )
+
+
+def registry_credentials(oc: Oc, namespace: str) -> tuple[str, str] | None:
+    """Read the provided credential Secret without returning or printing it on failure."""
+    secret = oc.get("secret", "exam-provided-oci-credentials", namespace) or {}
+    data = secret.get("data", {}) or {}
+    try:
+        username = base64.b64decode(data["username"], validate=True).decode("utf-8")
+        password = base64.b64decode(data["password"], validate=True).decode("utf-8")
+    except (KeyError, ValueError, UnicodeDecodeError):
+        return None
+    if not non_todo(username) or not non_todo(password):
+        return None
+    return username, password
+
+
+def registry_has_manifest(
+    oc: Oc,
+    namespace: str,
+    inputs: dict[str, str],
+    digest: str,
+) -> bool:
+    credentials = registry_credentials(oc, namespace)
+    if not credentials or not is_sha(digest):
+        return False
+    checker = getattr(oc, "registry_manifest_exists", None)
+    if not callable(checker):
+        return False
+    username, password = credentials
+    return bool(checker(
+        inputs.get("oci_registry", ""),
+        inputs.get("oci_repository", ""),
+        digest,
+        username,
+        password,
+    ))
 
 
 def grade_06(oc: Oc, ns: str) -> list[Result]:
@@ -702,6 +810,8 @@ def grade_06(oc: Oc, ns: str) -> list[Result]:
         artifacts.get("1.1.0", []), evidence.get("oci_digest_1_1", ""), repository
     ) \
         and evidence.get("oci_digest_1_0") != evidence.get("oci_digest_1_1") \
+        and registry_has_manifest(oc, ns, inputs, evidence.get("oci_digest_1_0", "")) \
+        and registry_has_manifest(oc, ns, inputs, evidence.get("oci_digest_1_1", "")) \
         and is_sha(evidence.get("pulled_artifact_sha256"))
     r3 = registry_metadata_matches(
         evidence, model, version_1_1, artifacts.get("1.1.0", [])
@@ -729,7 +839,7 @@ def grade_06(oc: Oc, ns: str) -> list[Result]:
 
     return [
         result("06-1", "fraud-risk identity·두 version", 6, r1, "model_id + 서로 다른 version ID"),
-        result("06-2", "서로 다른 OCI digest·pull checksum", 6, r2, "digest 값은 유효성만 검사"),
+        result("06-2", "서로 다른 실제 OCI manifest digest·pull checksum", 6, r2, "Registry manifest 존재 여부 검증"),
         result("06-3", "계보 metadata 완성", 6, r3, "source/data/run/metrics/use/approval"),
         result("06-4", "REST v1alpha3 API 응답 증적", 6, r4, "registry_api_response_sha256"),
         result("06-5", "1.1.0 exact artifact Ready 배포 연결", 6, r5, f"matching Ready deployments={len(matching_deployments)}"),

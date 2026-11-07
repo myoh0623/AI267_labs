@@ -52,7 +52,7 @@ Task 01·02·03·04·08·10에는 문제 전용 bucket과 `exam-provided-minio`�
 | 02 | Chapter 02 | S3 connection, Workbench, PVC, custom image, BuildConfig의 정상 예시 |
 | 03 | Chapter 06 | DSPA, KFP v2, Elyra, object storage의 정상 예시 |
 | 04 | Chapter 04 | OpenVINO/Custom ServingRuntime, KServe V2, route/token의 정상 예시 |
-| 06 | `serving-modelregistry` | Registry component, MariaDB, ONNX v1/v2와 OCI registry |
+| 06 | `serving-modelregistry` | Registry component, MariaDB, ONNX v1/v2와 PVC·pull Secret을 갖춘 시험 전용 OCI registry |
 | 07 | Chapter 05 | TrustyAI capture, reference data, drift request의 정상 예시 |
 | 08 | Chapter 08 | CPU 양자화 결과와 LMEvalJob server-side schema 검증 |
 | 09 | Chapter 09 | mock LLM, ACL/streaming 미완성 RAG, 쓰기 tool을 강화하는 기준 환경 |

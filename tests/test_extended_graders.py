@@ -32,6 +32,7 @@ class FixtureOc:
         self.lists = {}
         self.all_lists = {}
         self.raw_objects = {}
+        self.registry_manifests = set()
 
     def add(self, kind, name, value, namespace=None):
         self.objects[(kind, name, namespace)] = value
@@ -45,6 +46,10 @@ class FixtureOc:
     def add_raw(self, path, value):
         self.raw_objects[path] = value
 
+    def add_registry_manifest(self, registry, repository, digest):
+        normalized = str(digest).removeprefix("sha256:")
+        self.registry_manifests.add((registry, repository, f"sha256:{normalized}"))
+
     def get(self, kind, name, namespace=None):
         return self.objects.get((kind, name, namespace))
 
@@ -56,6 +61,18 @@ class FixtureOc:
 
     def raw_json(self, path):
         return self.raw_objects.get(path)
+
+    def registry_manifest_exists(
+        self, registry, repository, digest, username, password
+    ):
+        # Synthetic fixtures deliberately avoid external network calls while still
+        # requiring the exact provided credentials and manifest digest.
+        normalized = str(digest).removeprefix("sha256:")
+        return (
+            username == "ai267"
+            and password == "fixture-password"
+            and (registry, repository, f"sha256:{normalized}") in self.registry_manifests
+        )
 
 
 def cm(name, data):
@@ -76,6 +93,17 @@ def secret(name, *, service_account=None):
             "AWS_SECRET_ACCESS_KEY": encoded("secret"),
             "AWS_S3_ENDPOINT": encoded("https://minio.example"),
             "AWS_S3_BUCKET": encoded("bucket"),
+        },
+    }
+
+
+def registry_credentials_secret():
+    return {
+        "metadata": metadata("exam-provided-oci-credentials"),
+        "type": "Opaque",
+        "data": {
+            "username": encoded("ai267"),
+            "password": encoded("fixture-password"),
         },
     }
 
@@ -330,6 +358,13 @@ def task06():
         "oci_registry": "registry.lab.example.com:8443",
         "oci_repository": "redhattraining/models/fraud-risk",
     }), ns)
+    oc.add("secret", "exam-provided-oci-credentials", registry_credentials_secret(), ns)
+    oc.add_registry_manifest(
+        "registry.lab.example.com:8443", "redhattraining/models/fraud-risk", SHA
+    )
+    oc.add_registry_manifest(
+        "registry.lab.example.com:8443", "redhattraining/models/fraud-risk", SHA_B
+    )
     oc.add_raw(proxy + "/registered_models", {"items": [model]})
     oc.add_raw(proxy + "/registered_models/model-42/versions", {"items": [version_1, version_2]})
     oc.add_raw(proxy + "/model_versions/version-100/artifacts", {"items": [artifact_1]})
@@ -464,6 +499,29 @@ def negative_contracts():
     oc, ns = task06()
     path = next(path for path in oc.raw_objects if path.endswith("version-110/artifacts"))
     oc.raw_objects[path]["items"][0]["uri"] = "oci://wrong.example/model@sha256:" + SHA_B
+    assert "06-2" in failed_checks("06", oc, ns)
+
+    oc, ns = task06()
+    # A well-formed, made-up SHA must fail even if the Model Registry metadata is
+    # forged to reference it: the OCI Registry has no matching manifest.
+    evidence = oc.objects[("configmap", "registry-evidence", ns)]["data"]
+    evidence["oci_digest_1_0"] = SHA_C
+    path = next(path for path in oc.raw_objects if path.endswith("version-100/artifacts"))
+    oc.raw_objects[path]["items"][0]["uri"] = (
+        "oci://registry.lab.example.com:8443/redhattraining/models/fraud-risk@sha256:" + SHA_C
+    )
+    assert "06-2" in failed_checks("06", oc, ns)
+
+    oc, ns = task06()
+    oc.objects[("secret", "exam-provided-oci-credentials", ns)]["data"]["password"] = encoded(
+        "wrong-password"
+    )
+    assert "06-2" in failed_checks("06", oc, ns)
+
+    oc, ns = task06()
+    oc.objects[("configmap", "registry-evidence", ns)]["data"]["oci_digest_1_0"] = (
+        "not-a-sha256-digest"
+    )
     assert "06-2" in failed_checks("06", oc, ns)
 
     oc, ns = task09()

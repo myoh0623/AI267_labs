@@ -156,6 +156,57 @@ case "${task}" in
       --dry-run=client -o yaml | oc apply -f - >/dev/null
     ;;
   06)
+    lab_require_command openssl
+    lab_require_command htpasswd
+    lab_require_command curl
+    if ! oc get secret exam-provided-oci-credentials -n "${namespace}" >/dev/null 2>&1 \
+      || ! oc get secret exam-provided-oci-auth -n "${namespace}" >/dev/null 2>&1; then
+      oc delete secret exam-provided-oci-credentials exam-provided-oci-auth exam-provided-oci-pull \
+        -n "${namespace}" --ignore-not-found >/dev/null
+      registry_username=ai267
+      registry_password=$(openssl rand -hex 18)
+      registry_htpasswd=$(htpasswd -Bbn "${registry_username}" "${registry_password}")
+      oc create secret generic exam-provided-oci-credentials -n "${namespace}" \
+        --from-literal=username="${registry_username}" \
+        --from-literal=password="${registry_password}" >/dev/null
+      oc create secret generic exam-provided-oci-auth -n "${namespace}" \
+        --from-literal=htpasswd="${registry_htpasswd}" >/dev/null
+      oc label secret exam-provided-oci-credentials exam-provided-oci-auth -n "${namespace}" \
+        ex267.practice/input=true ex267.practice/task=06 --overwrite >/dev/null
+      unset registry_username registry_password registry_htpasswd
+    fi
+    oc apply -f "${task_dir}/resources/practice-oci-registry.yaml" >/dev/null
+    oc rollout status deployment/practice-oci-registry -n "${namespace}" --timeout=180s >/dev/null
+    practice_registry=$(oc get route practice-oci-registry -n "${namespace}" \
+      -o jsonpath='{.spec.host}')
+    [[ -n "${practice_registry}" ]] || lab_die 'Task 06 전용 OCI Registry Route를 찾지 못했습니다.'
+
+    registry_username=$(oc get secret exam-provided-oci-credentials -n "${namespace}" \
+      -o go-template='{{index .data "username" | base64decode}}')
+    registry_password=$(oc get secret exam-provided-oci-credentials -n "${namespace}" \
+      -o go-template='{{index .data "password" | base64decode}}')
+    oc create secret docker-registry exam-provided-oci-pull -n "${namespace}" \
+      --docker-server="${practice_registry}" \
+      --docker-username="${registry_username}" \
+      --docker-password="${registry_password}" \
+      --dry-run=client -o yaml | oc apply -f - >/dev/null
+    oc label secret exam-provided-oci-pull -n "${namespace}" \
+      ex267.practice/input=true ex267.practice/task=06 --overwrite >/dev/null
+    oc secrets link default exam-provided-oci-pull -n "${namespace}" --for=pull
+    registry_ready=false
+    for _ in $(seq 1 30); do
+      if curl --fail --silent --show-error --insecure \
+        --user "${registry_username}:${registry_password}" \
+        "https://${practice_registry}/v2/" >/dev/null 2>&1; then
+        registry_ready=true
+        break
+      fi
+      sleep 2
+    done
+    [[ "${registry_ready}" == true ]] \
+      || lab_die 'Task 06 전용 OCI Registry 인증 smoke test가 실패했습니다.'
+    unset registry_username registry_password registry_ready
+
     registry_name=$(oc get modelregistries.modelregistry.opendatahub.io -A \
       -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || true)
     registry_namespace=$(oc get modelregistries.modelregistry.opendatahub.io -A \
@@ -183,9 +234,10 @@ case "${task}" in
       --from-literal=registry_proxy_prefix="${registry_proxy_prefix}" \
       --from-literal=model_v1_path="${model_root}/v1" \
       --from-literal=model_v2_path="${model_root}/v2" \
-      --from-literal=oci_registry='registry.lab.example.com:8443' \
+      --from-literal=oci_registry="${practice_registry}" \
       --from-literal=oci_repository='redhattraining/models/fraud-risk' \
       --dry-run=client -o yaml | oc apply -f - >/dev/null
+    unset practice_registry
     ;;
   07)
     oc apply -f "${task_dir}/resources/exam-inputs.yaml" >/dev/null

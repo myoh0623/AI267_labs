@@ -94,7 +94,7 @@ cd AI267_labs
 | 03 | MinIO 합성 CSV, DSPA DB Secret, KFP v2·Elyra source와 5분 schedule 계약 |
 | 04 | 교재 ONNX v2/v1, SHA-256, 공식 OpenVINO runtime, 2.13→3.3 serving 호환 계약 |
 | 05 | 실제 GPU node 수와 실행 가능 여부 |
-| 06 | 교재 Model Registry/MariaDB/OCI registry/ONNX 자산 |
+| 06 | 교재 Model Registry/MariaDB/ONNX 자산, 임의 credential·PVC·pull Secret의 전용 practice OCI Registry |
 | 07 | Iris 기준 모델, client, versioned reference dataset |
 | 08 | baseline/optimized mock completions Service, OpenBookQA/GPT-2 offline cache, 한국어·안전 Unitxt recipe |
 | 09 | 쓰기 동작이 남은 mock RAG 앱, source/revision/ACL 계약, 고정 black-box verifier |
