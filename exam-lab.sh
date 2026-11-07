@@ -9,21 +9,11 @@ usage() {
 Usage:
   ./exam-lab.sh list
   ./exam-lab.sh validate
-  ./exam-lab.sh lab-env list
-  ./exam-lab.sh lab-env switch  <01-10>
-  ./exam-lab.sh lab-env prepare <01-10>
-  ./exam-lab.sh lab-env status  <01-10|all>
-  ./exam-lab.sh lab-env cleanup <01-10|all> [--yes]
-  ./exam-lab.sh preflight-all
-  ./exam-lab.sh prepare-all
-  ./exam-lab.sh status-all
-  ./exam-lab.sh grade-all [--json]
-  ./exam-lab.sh cleanup-all [--yes]
-  ./exam-lab.sh preflight <01-10>
-  ./exam-lab.sh prepare   <01-10>
-  ./exam-lab.sh status    <01-10>
-  ./exam-lab.sh grade     <01-10> [--json]
-  ./exam-lab.sh cleanup   <01-10> [--yes]
+  ./exam-lab.sh start   <01-12>
+  ./exam-lab.sh inspect <01-12>
+  ./exam-lab.sh grade   <01-12> [--json]
+  ./exam-lab.sh finish  <01-12>
+  ./exam-lab.sh reset   <01-12>
 EOF
 }
 
@@ -35,18 +25,21 @@ case "${action}" in
   validate)
     exec "${LAB_ROOT}/scripts/validate-local.sh"
     ;;
-  lab-env)
-    exec bash "${LAB_ROOT}/scripts/lab-environment.sh" "${@:2}"
+  start|finish|reset)
+    [[ -n "${2:-}" ]] || { usage; exit 2; }
+    task=$(lab_normalize_task "${2}") || { usage; exit 2; }
+    exec "${LAB_ROOT}/scripts/course-lab.sh" "${action}" "${task}"
     ;;
-  preflight-all|prepare-all|status-all|grade-all|cleanup-all)
-    exec "${LAB_ROOT}/scripts/all-tasks.sh" "${action%-all}" "${@:2}"
+  inspect|status)
+    [[ -n "${2:-}" ]] || { usage; exit 2; }
+    task=$(lab_normalize_task "${2}") || { usage; exit 2; }
+    exec "${LAB_ROOT}/scripts/status-task.sh" "${task}"
     ;;
-  preflight|prepare|status|grade|cleanup)
-    task=${2:-}
-    [[ -n "${task}" ]] || { usage; exit 2; }
-    task=$(lab_normalize_task "${task}") || { usage; exit 2; }
+  grade)
+    [[ -n "${2:-}" ]] || { usage; exit 2; }
+    task=$(lab_normalize_task "${2}") || { usage; exit 2; }
     shift 2
-    exec "${LAB_ROOT}/scripts/${action}-task.sh" "${task}" "$@"
+    exec "${LAB_ROOT}/scripts/grade-task.sh" "${task}" "$@"
     ;;
   *)
     usage

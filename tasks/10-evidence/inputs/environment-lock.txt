@@ -1,3 +1,0 @@
-python=3.12
-replay_contract=ex267-synthetic-v1
-seed=267

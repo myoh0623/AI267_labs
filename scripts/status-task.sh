@@ -5,45 +5,40 @@ readonly SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 source "${SCRIPT_DIR}/lab-common.sh"
 
 task=$1
-namespace=$(lab_task_namespace "${task}")
+lab_load_task "${task}"
+lab_require_command lab
 lab_require_login
 
-namespace_ready=false
-for _ in 1 2 3 4 5; do
-  if oc get namespace "${namespace}" >/dev/null 2>&1; then
-    namespace_ready=true
-    break
-  fi
-  sleep 2
-done
-[[ "${namespace_ready}" == true ]] || lab_die "Task ${task} is not prepared."
-printf 'Task %s · namespace %s\n\n' "${task}" "${namespace}"
-oc get all,pvc,configmap,secret,serviceaccount,rolebinding,networkpolicy,route,imagestream,buildconfig \
-  -n "${namespace}" 2>/dev/null || true
+printf 'Task %s · %s\n' "${TASK_ID}" "${TASK_TITLE}"
+printf '공식 Lab: %s\n' "${TASK_LAB}"
+printf '프로젝트: %s\n\n' "${TASK_NAMESPACE}"
+lab_course_status "${TASK_LAB}"
+
+if ! oc get namespace "${TASK_NAMESPACE}" >/dev/null 2>&1; then
+  printf '\n프로젝트 %s가 아직 없습니다.\n' "${TASK_NAMESPACE}"
+  exit 0
+fi
+
+printf '\n[Kubernetes resources]\n'
+oc get pod,service,statefulset,pvc,configmap,secret,rolebinding,route,imagestream \
+  -n "${TASK_NAMESPACE}" 2>/dev/null || true
 
 for resource in \
   notebooks.kubeflow.org \
+  hardwareprofiles.infrastructure.opendatahub.io \
   datasciencepipelinesapplications.datasciencepipelinesapplications.opendatahub.io \
+  pipelines.pipelines.kubeflow.org \
+  pipelineversions.pipelines.kubeflow.org \
   workflows.argoproj.io \
   scheduledworkflows.kubeflow.org \
   cronworkflows.argoproj.io \
-  inferenceservices.serving.kserve.io \
-  hardwareprofiles.infrastructure.opendatahub.io \
-  trustyaiservices.trustyai.opendatahub.io \
-  lmevaljobs.trustyai.opendatahub.io; do
-  oc get "${resource}" -n "${namespace}" 2>/dev/null || true
+  inferenceservices.serving.kserve.io; do
+  oc get "${resource}" -n "${TASK_NAMESPACE}" 2>/dev/null || true
 done
 
-oc get servingruntimes.serving.kserve.io -n "${namespace}" 2>/dev/null || true
-
-if [[ "${task}" == 01 ]]; then
-  oc get groups.user.openshift.io devops-wala rhoai-exam-admins 2>/dev/null || true
-  oc get auth.services.platform.opendatahub.io auth -o wide 2>/dev/null || \
-    oc get auth.services.platform.opendatahub.io auth -n redhat-ods-applications -o wide 2>/dev/null || true
-  oc get datasciencecluster -o wide 2>/dev/null || true
-fi
-
 if [[ "${task}" == 02 ]]; then
-  oc get configmap notebook-controller-culler-config -n redhat-ods-applications 2>/dev/null || true
+  printf '\n[RHOAI access]\n'
+  oc get auth.services.platform.opendatahub.io auth -o jsonpath='{.spec}' 2>/dev/null || true
+  printf '\n'
+  oc get group devops-wala ai267-admins 2>/dev/null || true
 fi
-

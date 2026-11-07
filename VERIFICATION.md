@@ -1,45 +1,68 @@
-# 실습 환경 검증 요약
+# 검증 기록
 
-최종 검증일: 2026-11-07 (Asia/Seoul)
+기준일: 2026-11-07 (Asia/Seoul)
 
-이 문서는 공개 가능한 검증 결과만 기록한다. 대상 클러스터 주소, 로그인 정보, Secret 값과 내부 API 응답 본문은 저장하지 않는다.
+대상: AI267 3.3 교실용 원격 워크스테이션(공개 문서에서는 접속 주소 생략)
 
-## 결론
+## 확인된 플랫폼
 
-기존 10개 문제는 유지했고, V2.13 번호형 Markdown 34개를 모두 문제 지침·환경 준비·실제 리소스 채점에 연결했다. `ai267 start <task>`는 해당 문제에 필요한 교재 Lab과 `exam-provided-*` 입력만 만들며, 응시자가 완성해야 할 답안 리소스는 만들지 않는다.
+- `oc whoami`: `admin`
+- Red Hat OpenShift AI CSV: `rhods-operator.3.3.1`, `Succeeded`
+- Lab CLI: `/usr/local/bin/lab`
+- 설치 과정: AI267 계열 3.3.0 course
+- API: `HardwareProfile v1`, `Notebook v1`, `DSPA v1`, `Pipeline/PipelineVersion v2beta1`, `InferenceService v1beta1`
 
-`finish`는 만점일 때만 시험 namespace와 활성 교재 Lab을 정리한다. 실패하면 리소스를 보존하므로 수정한 뒤 다시 채점할 수 있다.
+EPUB에서 다음 공식 Lab 이름을 직접 확인했고 원격 `lab status`에서도 모두 인식되었다.
 
-## 자동 검증
+```text
+intro-projects
+workbench-creating
+workbench-connections
+workbench-working
+workbench-custom
+serving-openvino
+dspa-intro
+dspa-kubeflow
+dspa-elyra
+```
 
-`./exam-lab.sh validate`로 다음 항목을 확인했다.
+`workbench-creating`은 실제로 빈 상태에서 `lab start` 후 `lab finish`를 실행해 프로젝트 생성과 정리를 확인했다. 최종 상태는 `Finished`였고 프로젝트가 삭제되었다.
 
-- Bash·Python 구문과 86개 YAML 문서 파싱
-- 10개 문제의 점수 계약
-- Task 01·06·09 부정 fixture와 주요 문제의 정상 fixture
-- V2.13 원문 34/34 경로·고정 checksum·채점 ID 매핑
-- 문제별 필수 파일과 seed/grader 계약 완전성
+`serving-openvino`은 start 후 Connection Secret의 3.3 label/annotation과 Workbench 환경을 확인하고 finish했다. 표준 라이브러리 SigV4 helper는 격리된 임시 bucket에서 create/upload/download/byte-compare/purge/delete를 모두 통과했으며, 공식 Lab과 임시 bucket은 남지 않았다.
 
-## 실제 실습 흐름 검증
+`workbench-connections`은 start 후 실제 Pod container가 `workbench-connections-wb`와 `kube-rbac-proxy`임을 확인했다. `-c workbench-connections-wb`로 `/opt/app-root/src`에 입력 파일을 쓰고 읽는 smoke test가 성공했으며, 임시 파일을 지운 뒤 Lab을 finish했다. 최종 상태는 `Finished`이고 namespace가 남지 않았다.
 
-| 범위 | 확인 결과 |
-| --- | --- |
-| Task 01 | 플랫폼 상태는 읽기 전용으로 확인하고, 응시자 Group/Auth/RBAC/S3 작업만 점수에 반영됨을 확인했다. |
-| Task 02~04 | `start`가 입력 없이 환경을 준비하고 초기 답안은 0점이며, starter YAML의 server-side dry-run과 cleanup이 성공했다. |
-| Task 05 | GPU가 없는 환경에서는 Pending·scheduler 진단까지만 수행하며 가짜 GPU를 만들지 않는다. |
-| Task 06 | PVC와 인증된 전용 OCI Registry, kubelet pull Secret이 자동 준비되고 초기 채점은 0/30이었다. 두 ModelCar push/pull, 실제 REST metadata, Ready InferenceService를 만든 뒤 30/30을 확인했다. 존재하지 않는 정상 형식 digest는 06-2에서 실패했고, 원복 후 `finish`가 다시 30/30 및 cleanup을 완료했다. |
-| Task 07~08 | 제공 데이터·기준 서비스와 완료 상태 기반 채점 계약을 확인했다. |
-| Task 09 | 미완성 RAG baseline은 0/30이고, RBAC·제한 egress·고정 black-box verifier의 10개 동작 검증을 모두 만족하면 30/30임을 확인했다. `finish` cleanup도 확인했다. |
-| Task 10 | 제공 모델·sample·lock·replay 입력과 응시자 소유 evidence/rollback 계약을 분리했다. |
+## 구현 검증 범위
 
-## 주요 채점 방어
+- wrapper가 공식 Lab project를 직접 사용하고 `ex267-*` namespace를 만들지 않는지
+- 다른 문제가 Started 상태일 때 다음 문제 시작을 거부하는지
+- 실패한 채점에서 Lab을 보존하고 만점에서만 finish하는지
+- Task 02의 Auth/전체 Group/ClusterRoleBinding backup이 모두 유효할 때만 복구하고, 불완전한 state에서는 아무 전역 변경도 하지 않는지
+- Task 08·09·11의 공용 S3 helper가 task-created bucket의 무작위 ownership object를 검증하고, 누락·불일치 시 purge/delete 없이 fail-closed하는지
+- S3 fixture cleanup이 공식 Lab의 MinIO 의존성이 살아 있는 동안 먼저 실행되고, 실패하면 공식 Lab과 recovery state를 보존하는지
+- Task 10이 기존 가상환경 경로를 거부하고 exact task-owned marker가 있을 때만 recursive delete하는지
+- Task 05 채점 Job이 중지된 Workbench PVC를 read-only로만 mount하고, exact ownership을 확인한 뒤 성공·실패 모두에서 삭제되는지
+- Task 12 compatibility Secret이 공식 `s3-minio`의 네 값만 복제하고 task ownership marker가 있을 때만 정리되는지
+- 각 grader가 공식 Lab baseline만으로 100점을 주지 않는지
+- 17개 첨부 파일이 SOURCE-MAP에 정확히 한 번씩 대응하는지
 
-- 환경의 Operator·Registry 설치 상태만으로 점수를 주지 않는다.
-- Task 01은 실제 Group label, Auth allow/admin group, RoleBinding과 제공 S3 값의 일치를 검사한다.
-- Task 06은 RHOAI REST의 model/version/artifact ID·metadata, 전용 OCI Registry의 두 실제 manifest digest, Registry ID 라벨이 연결된 Ready InferenceService를 직접 대조한다.
-- Task 09는 정확한 Role/RoleBinding/egress NetworkPolicy와 원본 checksum이 고정된 verifier Job의 실제 성공을 요구한다.
-- Secret, token, 원문 API 응답은 evidence ConfigMap에 저장하지 않는다.
+## 최종 검증 결과
 
-## 남은 물리적 제한
+- `./exam-lab.sh validate`: PASS
+  - 12개 Task와 각 5개 채점 항목(총 60개) 계약 확인
+  - grader 회귀 테스트 22개 PASS
+  - fixture 정리 안전성 테스트 5개 PASS
+  - Lab start/finish/reset 수명주기 회귀 테스트 PASS
+  - 첨부 문서 17/17 mapping 확인
+- `git diff --check`: PASS
 
-GPU node가 없는 클러스터에서는 Task 05의 실제 vLLM GPU streaming과 성능 기준선만 완전 검증할 수 없다. 나머지 문제는 제공 Lab 또는 합성 데이터·서비스로 시작, 초기 실패, 정상 성공과 정리를 검증했다.
+위의 세 Lab에 대한 실제 start/finish smoke test는 변경 전 원격 세션에서 완료했다. 최종 변경본을 대상으로 한 전체 Task 원격 smoke test는 워크스테이션이 오프라인이어서 실행하지 못했다. 마지막으로 직접 시작했던 `dspa-kubeflow`의 종료 상태도 같은 이유로 재확인하지 못했으므로, 워크스테이션이 다시 온라인이 되면 다음 명령으로 먼저 정리 상태를 확인한다.
+
+```bash
+lab status dspa-kubeflow
+cd && lab finish dspa-kubeflow
+```
+
+정적·회귀 테스트는 실제 OpenShift API, Dashboard 조작, Pipeline run과 model inference를 대체하지 않는다. 나머지 Task의 end-to-end 확인은 해당 교실 클러스터에서 순서대로 `ai267 NN` → 풀이 → `ai267 grade NN` → `ai267 finish NN`을 실행해 완료해야 한다.
+
+Task 06 채점은 두 local tag가 같은 image인지, `custom-workbench-image:1.0` remote import가 성공했는지, 실제 Workbench에서 package가 동작하는지까지 확인한다. 독립형 교실 registry의 인증·인증서에 의존하는 `custom-workbench:1.0` 첫 번째 tag의 remote manifest 자체는 자동 채점하지 않으므로, 해당 push 명령의 성공 출력은 실습자가 별도로 확인한다.

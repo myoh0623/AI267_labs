@@ -1,61 +1,108 @@
 #!/usr/bin/env python3
-"""EX267 v3.3 practice-lab resource grader.
+"""Graders for the AI267 3.3 practice tasks.
 
-The grader reads Kubernetes/OpenShift resources only. It never prints Secret data.
+Checks are read-only except Task 05's short-lived verification Job. That Job mounts
+the stopped Workbench PVC read-only, emits booleans only, and is deleted in finally.
 """
 
 from __future__ import annotations
 
 import argparse
+import ast
 import base64
-from dataclasses import asdict, dataclass
-import hashlib
 import json
+import os
 import re
+import runpy
+import secrets
 import ssl
 import subprocess
 import sys
-from typing import Any, Callable
 import urllib.error
-import urllib.parse
 import urllib.request
+from dataclasses import asdict, dataclass
+from pathlib import Path
+from typing import Any, Callable
 
 
-TASKS = {
-    "01": ("ex267-fraud", 21, "사용자·프로젝트·S3"),
-    "02": ("ex267-t02-workbench", 30, "Workbench·이미지·Git·S3"),
-    "03": ("ex267-t03-pipeline", 36, "KFP·Elyra Pipeline·예약 실행"),
-    "04": ("ex267-t04-serving", 36, "OpenVINO·Custom Runtime·인증"),
-    "05": ("ex267-t05-vllm", 30, "vLLM·GPU 배치 진단"),
-    "06": ("ex267-t06-registry", 30, "Model Registry·계보"),
-    "07": ("ex267-t07-monitoring", 30, "TrustyAI·플랫폼 모니터링"),
-    "08": ("ex267-t08-evaluation", 24, "LLM 최적화·LMEval"),
-    "09": ("ex267-t09-rag", 30, "Guardrailed RAG"),
-    "10": ("ex267-t10-evidence", 24, "재현·증적·롤백"),
-}
-
-SHA256 = re.compile(r"^(?:sha256:)?[0-9a-f]{64}$")
-GIT_SHA = re.compile(r"^[0-9a-f]{40}$")
-PINNED_IMAGE = re.compile(r"@sha256:[0-9a-f]{64}$")
-TODO_VALUES = {"", "todo", "replace_me", "replace-me", "pending", "unknown", "n/a"}
-RAG_VERIFIER_SHA256 = "748680af31b40caa35d09bd660034a660e48602be19097904200e429b464edcf"
-RAG_VERIFIER_IMAGE = "registry.access.redhat.com/ubi9/python-312:9.6"
+ROOT = Path(__file__).resolve().parents[1]
+CATALOG = ROOT / "tasks" / "catalog.tsv"
+ELYRA_RUNTIME_DISPLAY_NAME = "forecast-pipeline-runtime"
+ELYRA_RUNTIME_IMAGE = "registry.lab.example.com:8443/redhattraining/dspa-elyra-runtime:v2.0"
 
 
-@dataclass
-class Result:
-    check_id: str
-    description: str
+@dataclass(frozen=True)
+class Task:
+    task_id: str
+    slug: str
+    lab: str
+    namespace: str
+    title: str
     points: int
+
+
+@dataclass(frozen=True)
+class Check:
+    check_id: str
+    title: str
     passed: bool
     detail: str
+    points: int = 20
+
+
+def load_tasks() -> dict[str, Task]:
+    tasks: dict[str, Task] = {}
+    for line in CATALOG.read_text(encoding="utf-8").splitlines():
+        if not line or line.startswith("#"):
+            continue
+        task_id, slug, lab, namespace, title, points = line.split("\t")
+        tasks[task_id] = Task(task_id, slug, lab, namespace, title, int(points))
+    return tasks
+
+
+TASKS = load_tasks()
 
 
 class Oc:
-    def run(self, *args: str) -> subprocess.CompletedProcess[str]:
-        return subprocess.run(
-            ["oc", *args], text=True, capture_output=True, check=False
-        )
+    def run(self, *args: str, timeout: int = 30) -> subprocess.CompletedProcess[str]:
+        try:
+            return subprocess.run(
+                ["oc", *args],
+                check=False,
+                capture_output=True,
+                text=True,
+                timeout=timeout,
+            )
+        except subprocess.TimeoutExpired as exc:
+            return subprocess.CompletedProcess(
+                ["oc", *args],
+                124,
+                stdout=str(exc.stdout or ""),
+                stderr=f"oc command timed out after {timeout}s",
+            )
+
+    def run_input(
+        self,
+        input_text: str,
+        *args: str,
+        timeout: int = 30,
+    ) -> subprocess.CompletedProcess[str]:
+        try:
+            return subprocess.run(
+                ["oc", *args],
+                input=input_text,
+                check=False,
+                capture_output=True,
+                text=True,
+                timeout=timeout,
+            )
+        except subprocess.TimeoutExpired as exc:
+            return subprocess.CompletedProcess(
+                ["oc", *args],
+                124,
+                stdout=str(exc.stdout or ""),
+                stderr=f"oc command timed out after {timeout}s",
+            )
 
     def get(self, kind: str, name: str, namespace: str | None = None) -> dict[str, Any] | None:
         args = ["get", kind, name]
@@ -63,1036 +110,2574 @@ class Oc:
             args += ["-n", namespace]
         args += ["-o", "json"]
         result = self.run(*args)
-        if result.returncode != 0:
+        if result.returncode:
             return None
         try:
             return json.loads(result.stdout)
         except json.JSONDecodeError:
             return None
 
-    def list(self, kind: str, namespace: str, selector: str | None = None) -> list[dict[str, Any]]:
-        args = ["get", kind, "-n", namespace]
-        if selector:
-            args += ["-l", selector]
+    def list(self, kind: str, namespace: str | None = None) -> list[dict[str, Any]]:
+        args = ["get", kind]
+        if namespace:
+            args += ["-n", namespace]
+        else:
+            args.append("-A")
         args += ["-o", "json"]
         result = self.run(*args)
-        if result.returncode != 0:
+        if result.returncode:
             return []
         try:
             return json.loads(result.stdout).get("items", [])
         except json.JSONDecodeError:
             return []
 
-    def list_all(self, kind: str) -> list[dict[str, Any]]:
-        result = self.run("get", kind, "-A", "-o", "json")
-        if result.returncode != 0:
-            return []
-        try:
-            return json.loads(result.stdout).get("items", [])
-        except json.JSONDecodeError:
-            return []
-
-    def raw_json(self, path: str) -> dict[str, Any] | None:
-        result = self.run("get", "--raw", path)
-        if result.returncode != 0:
-            return None
-        try:
-            return json.loads(result.stdout)
-        except json.JSONDecodeError:
-            return None
-
-    def registry_manifest_exists(
+    def exec(
         self,
-        registry: str,
-        repository: str,
-        digest: str,
-        username: str,
-        password: str,
-    ) -> bool:
-        """Verify an exact manifest digest without logging Registry credentials."""
-        registry = str(registry or "").strip().rstrip("/")
-        if "://" not in registry:
-            registry = f"https://{registry}"
-        parsed = urllib.parse.urlsplit(registry)
-        if parsed.scheme != "https" or not parsed.hostname \
-                or parsed.username or parsed.password \
-                or parsed.path not in ("", "/") or parsed.query or parsed.fragment:
-            return False
-
-        repository = str(repository or "").strip().strip("/")
-        if not re.fullmatch(
-            r"[a-z0-9]+(?:[._-][a-z0-9]+)*(?:/[a-z0-9]+(?:[._-][a-z0-9]+)*)*",
-            repository,
-        ):
-            return False
-        normalized = str(digest or "").strip().lower().removeprefix("sha256:")
-        if not re.fullmatch(r"[0-9a-f]{64}", normalized):
-            return False
-        expected = f"sha256:{normalized}"
-
-        quoted_repository = urllib.parse.quote(repository, safe="/")
-        url = f"{parsed.scheme}://{parsed.netloc}/v2/{quoted_repository}/manifests/{expected}"
-        token = base64.b64encode(f"{username}:{password}".encode()).decode("ascii")
-        request = urllib.request.Request(url, headers={
-            "Accept": ", ".join([
-                "application/vnd.oci.image.manifest.v1+json",
-                "application/vnd.oci.image.index.v1+json",
-                "application/vnd.docker.distribution.manifest.v2+json",
-                "application/vnd.docker.distribution.manifest.list.v2+json",
-            ]),
-            "Authorization": f"Basic {token}",
-        })
-
-        class NoRedirect(urllib.request.HTTPRedirectHandler):
-            def redirect_request(self, req, fp, code, msg, headers, newurl):
-                return None
-
-        # The lab Route uses the cluster's practice certificate. Keep the request
-        # HTTPS-only, disable redirects/proxies, and never expose response errors.
-        context = ssl.create_default_context()
-        context.check_hostname = False
-        context.verify_mode = ssl.CERT_NONE
-        opener = urllib.request.build_opener(
-            urllib.request.ProxyHandler({}),
-            urllib.request.HTTPSHandler(context=context),
-            NoRedirect(),
+        namespace: str,
+        pod: str,
+        container: str,
+        command: list[str],
+        timeout: int = 45,
+    ) -> subprocess.CompletedProcess[str]:
+        return self.run(
+            "exec",
+            "-n",
+            namespace,
+            pod,
+            "-c",
+            container,
+            "--",
+            *command,
+            timeout=timeout,
         )
-        try:
-            with opener.open(request, timeout=10) as response:
-                body = response.read(8 * 1024 * 1024 + 1)
-                if response.status != 200 or len(body) > 8 * 1024 * 1024:
-                    return False
-                response_digest = str(response.headers.get("Docker-Content-Digest", "")).lower()
-        except (OSError, ValueError, urllib.error.URLError):
-            return False
-
-        body_digest = f"sha256:{hashlib.sha256(body).hexdigest()}"
-        return body_digest == expected and response_digest in ("", expected)
 
 
 def dig(value: Any, *path: Any, default: Any = None) -> Any:
     current = value
     for key in path:
         try:
-            current = current[key]
-        except (KeyError, IndexError, TypeError):
+            if isinstance(key, int):
+                current = current[key]
+            else:
+                current = current.get(key)
+        except (AttributeError, IndexError, KeyError, TypeError):
+            return default
+        if current is None:
             return default
     return current
 
 
-def non_todo(value: Any) -> bool:
-    if value is None:
+def check(check_id: str, title: str, passed: bool, detail: str) -> Check:
+    return Check(check_id, title, bool(passed), detail)
+
+
+def ready(resource: dict[str, Any] | None, condition: str = "Ready") -> bool:
+    conditions = dig(resource, "status", "conditions", default=[]) or []
+    return any(
+        item.get("type") == condition and str(item.get("status")).lower() == "true"
+        for item in conditions
+    )
+
+
+def phase(resource: dict[str, Any] | None) -> str:
+    return str(dig(resource, "status", "phase", default=""))
+
+
+def annotations(resource: dict[str, Any] | None) -> dict[str, str]:
+    return dig(resource, "metadata", "annotations", default={}) or {}
+
+
+def labels(resource: dict[str, Any] | None) -> dict[str, str]:
+    return dig(resource, "metadata", "labels", default={}) or {}
+
+
+def resource_name(resource: dict[str, Any] | None) -> str:
+    return str(dig(resource, "metadata", "name", default=""))
+
+
+def first_container(resource: dict[str, Any] | None) -> dict[str, Any]:
+    containers = dig(resource, "spec", "template", "spec", "containers", default=[]) or []
+    return containers[0] if containers else {}
+
+
+def secret_data(secret: dict[str, Any] | None) -> dict[str, str]:
+    decoded: dict[str, str] = {}
+    for key, value in (dig(secret, "data", default={}) or {}).items():
+        try:
+            decoded[key] = base64.b64decode(value).decode("utf-8")
+        except Exception:
+            decoded[key] = ""
+    decoded.update(dig(secret, "stringData", default={}) or {})
+    return decoded
+
+
+def group_users(group: dict[str, Any] | None) -> set[str]:
+    return set(dig(group, "users", default=[]) or [])
+
+
+def role_for_user(oc: Any, namespace: str, user: str, accepted_roles: set[str]) -> bool:
+    for binding in oc.list("rolebinding.rbac.authorization.k8s.io", namespace):
+        role = str(dig(binding, "roleRef", "name", default=""))
+        if role not in accepted_roles:
+            continue
+        for subject in dig(binding, "subjects", default=[]) or []:
+            if subject.get("kind") == "User" and subject.get("name") == user:
+                return True
+    return False
+
+
+def roles_for_user(oc: Any, namespace: str, user: str) -> set[str]:
+    roles: set[str] = set()
+    for binding in oc.list("rolebinding.rbac.authorization.k8s.io", namespace):
+        if any(
+            subject.get("kind") == "User" and subject.get("name") == user
+            for subject in (dig(binding, "subjects", default=[]) or [])
+        ):
+            roles.add(str(dig(binding, "roleRef", "name", default="")))
+    return roles
+
+
+def dangerous_cluster_binding(
+    oc: Any,
+    *,
+    users: set[str] | None = None,
+    groups: set[str] | None = None,
+) -> bool:
+    users = users or set()
+    groups = groups or set()
+    dangerous_roles = {"cluster-admin", "admin", "rhods-admin", "ods-admin"}
+    for binding in oc.list("clusterrolebinding.rbac.authorization.k8s.io"):
+        if str(dig(binding, "roleRef", "name", default="")).lower() not in dangerous_roles:
+            continue
+        for subject in dig(binding, "subjects", default=[]) or []:
+            if subject.get("kind") == "User" and subject.get("name") in users:
+                return True
+            if subject.get("kind") == "Group" and subject.get("name") in groups:
+                return True
+    return False
+
+
+def notebook_pod(oc: Any, namespace: str, notebook_name: str) -> tuple[str, str] | None:
+    try:
+        pods = oc.list("pod", namespace)
+    except Exception:
+        return None
+    candidates: list[dict[str, Any]] = []
+    for pod in pods:
+        pod_labels = labels(pod)
+        name = resource_name(pod)
+        if (
+            pod_labels.get("notebook-name") == notebook_name
+            or pod_labels.get("app") == notebook_name
+            or name == f"{notebook_name}-0"
+            or name.startswith(f"{notebook_name}-")
+        ):
+            candidates.append(pod)
+    if not candidates:
+        return None
+    candidates.sort(key=lambda item: resource_name(item))
+    pod = candidates[0]
+    containers = dig(pod, "spec", "containers", default=[]) or []
+    names = [item.get("name", "") for item in containers]
+    container = next(
+        (name for name in names if name and name not in {"oauth-proxy", "kube-rbac-proxy"}),
+        names[0] if names else "",
+    )
+    return resource_name(pod), container
+
+
+def pod_is_ready(oc: Any, namespace: str, notebook_name: str) -> bool:
+    location = notebook_pod(oc, namespace, notebook_name)
+    if not location:
         return False
-    text = str(value).strip()
-    return bool(text) and text.lower() not in TODO_VALUES and "<" not in text
+    pod = oc.get("pod", location[0], namespace)
+    statuses = dig(pod, "status", "containerStatuses", default=[]) or []
+    return phase(pod) == "Running" and bool(statuses) and all(
+        bool(item.get("ready")) for item in statuses
+    )
 
 
-def is_sha(value: Any) -> bool:
-    return bool(SHA256.fullmatch(str(value or "").strip().lower()))
+def exec_notebook(
+    oc: Any,
+    namespace: str,
+    notebook_name: str,
+    command: list[str],
+    timeout: int = 45,
+) -> subprocess.CompletedProcess[str] | None:
+    location = notebook_pod(oc, namespace, notebook_name)
+    if not location or not hasattr(oc, "exec"):
+        return None
+    try:
+        return oc.exec(namespace, location[0], location[1], command, timeout=timeout)
+    except Exception:
+        return None
 
 
-def is_git_sha(value: Any) -> bool:
-    return bool(GIT_SHA.fullmatch(str(value or "").strip().lower()))
+def exec_ok(
+    oc: Any,
+    namespace: str,
+    notebook_name: str,
+    command: list[str],
+    timeout: int = 45,
+) -> bool:
+    result = exec_notebook(oc, namespace, notebook_name, command, timeout)
+    return bool(result and result.returncode == 0)
 
 
-def cm_data(oc: Oc, name: str, namespace: str) -> dict[str, str]:
-    return dig(oc.get("configmap", name, namespace), "data", default={}) or {}
+def exec_stdout(
+    oc: Any,
+    namespace: str,
+    notebook_name: str,
+    command: list[str],
+    timeout: int = 45,
+) -> str:
+    result = exec_notebook(oc, namespace, notebook_name, command, timeout)
+    return result.stdout if result and result.returncode == 0 else ""
 
 
-def has_values(data: dict[str, str], keys: list[str]) -> bool:
-    return all(non_todo(data.get(key)) for key in keys)
+def notebook_references(resource: dict[str, Any] | None, name: str) -> bool:
+    if not resource:
+        return False
+    return name in json.dumps(resource, ensure_ascii=False)
 
 
-def condition_true(resource: dict[str, Any] | None, condition_type: str = "Ready") -> bool:
-    for condition in dig(resource, "status", "conditions", default=[]) or []:
-        if condition.get("type") == condition_type and str(condition.get("status")).lower() == "true":
+def notebook_uses_hardware_profile(
+    notebook: dict[str, Any] | None,
+    name: str,
+    namespace: str,
+) -> bool:
+    note = annotations(notebook)
+    return (
+        note.get("opendatahub.io/hardware-profile-name") == name
+        and note.get("opendatahub.io/hardware-profile-namespace") == namespace
+    )
+
+
+def notebook_image_is(
+    notebook: dict[str, Any] | None,
+    *,
+    display_name: str,
+    image_tokens: tuple[str, ...],
+) -> bool:
+    note = annotations(notebook)
+    if note.get("opendatahub.io/image-display-name") == display_name:
+        return True
+    selected = str(note.get("notebooks.opendatahub.io/last-image-selection", "")).lower()
+    image = str(first_container(notebook).get("image", "")).lower()
+    return all(token.lower() in f"{selected} {image}" for token in image_tokens)
+
+
+def notebook_image_version_is(
+    notebook: dict[str, Any] | None,
+    version: str,
+) -> bool:
+    """Match an exact workbench image tag, never a version substring.
+
+    The Dashboard records the selected ImageStreamTag in
+    ``notebooks.opendatahub.io/last-image-selection``. Some manifests retain a
+    tagged container reference instead, so both documented representations are
+    accepted.
+    """
+
+    candidates = (
+        annotations(notebook).get("notebooks.opendatahub.io/last-image-selection", ""),
+        first_container(notebook).get("image", ""),
+    )
+    for candidate in candidates:
+        reference = str(candidate).strip()
+        if "@" in reference:
+            continue
+        final_segment = reference.rsplit("/", 1)[-1]
+        _, separator, tag = final_segment.rpartition(":")
+        if separator and tag == version:
             return True
     return False
 
 
-def completed_job(resource: dict[str, Any] | None) -> bool:
-    return condition_true(resource, "Complete") or int(dig(resource, "status", "succeeded", default=0) or 0) > 0
+def notebook_has_source(
+    notebook: dict[str, Any] | None,
+    source_kind: str,
+    source_name: str,
+) -> bool:
+    key = f"{source_kind}Ref"
+    return any(
+        dig(item, key, "name") == source_name
+        for item in (first_container(notebook).get("envFrom", []) or [])
+    )
 
 
-def secret_values_are_real(secret: dict[str, Any] | None, keys: list[str]) -> bool:
-    if not secret:
+def notebook_has_connection(
+    notebook: dict[str, Any] | None,
+    namespace: str,
+    connection_name: str,
+) -> bool:
+    raw = str(annotations(notebook).get("opendatahub.io/connections", ""))
+    try:
+        decoded = json.loads(raw)
+    except json.JSONDecodeError:
+        decoded = None
+    if isinstance(decoded, list):
+        references = {str(item).strip() for item in decoded if str(item).strip()}
+    else:
+        references = {
+            item.strip().strip("[]\"'")
+            for item in raw.split(",")
+            if item.strip().strip("[]\"'")
+        }
+    prefix = "aws-connection-"
+    logical_name = (
+        connection_name[len(prefix) :]
+        if connection_name.startswith(prefix)
+        else connection_name
+    )
+    secret_name = f"{prefix}{logical_name}"
+    names = {logical_name, secret_name}
+    accepted = names | {f"{namespace}/{name}" for name in names}
+    return bool(references & accepted) or any(
+        notebook_has_source(notebook, "secret", name) for name in names
+    )
+
+
+def notebook_has_pvc(notebook: dict[str, Any] | None, claim_name: str) -> bool:
+    volumes = dig(notebook, "spec", "template", "spec", "volumes", default=[]) or []
+    return any(dig(volume, "persistentVolumeClaim", "claimName") == claim_name for volume in volumes)
+
+
+def notebook_has_bound_storage(
+    oc: Any,
+    namespace: str,
+    notebook: dict[str, Any] | None,
+    accepted_sizes: set[str],
+) -> bool:
+    volumes = dig(notebook, "spec", "template", "spec", "volumes", default=[]) or []
+    claims = {
+        str(dig(volume, "persistentVolumeClaim", "claimName", default=""))
+        for volume in volumes
+    }
+    for claim in claims - {""}:
+        pvc = oc.get("pvc", claim, namespace)
+        size = str(dig(pvc, "spec", "resources", "requests", "storage", default=""))
+        if phase(pvc) == "Bound" and size in accepted_sizes:
+            return True
+    return False
+
+
+def notebook_code(content: str) -> str:
+    try:
+        document = json.loads(content)
+    except (json.JSONDecodeError, TypeError):
+        return ""
+    sources: list[str] = []
+    for cell in document.get("cells", []) or []:
+        if cell.get("cell_type") != "code":
+            continue
+        source = cell.get("source", "")
+        sources.append("".join(source) if isinstance(source, list) else str(source))
+    return "\n".join(sources)
+
+
+def notebook_ran_without_errors(content: str) -> bool:
+    try:
+        document = json.loads(content)
+    except (json.JSONDecodeError, TypeError):
         return False
-    data = secret.get("data", {})
-    if not all(key in data for key in keys):
+    code_cells = [cell for cell in (document.get("cells", []) or []) if cell.get("cell_type") == "code"]
+    substantive = []
+    for cell in code_cells:
+        source = cell.get("source", "")
+        text = "".join(source) if isinstance(source, list) else str(source)
+        if text.strip():
+            substantive.append(cell)
+    return bool(substantive) and all(
+        cell.get("execution_count") is not None
+        and not any(output.get("output_type") == "error" for output in (cell.get("outputs", []) or []))
+        for cell in substantive
+    )
+
+
+def notebook_cell_executed(content: str, marker: str) -> bool:
+    try:
+        document = json.loads(content)
+    except (json.JSONDecodeError, TypeError):
         return False
-    for key in keys:
+    for cell in document.get("cells", []) or []:
+        if cell.get("cell_type") != "code":
+            continue
+        source = cell.get("source", "")
+        text = "".join(source) if isinstance(source, list) else str(source)
+        if marker not in text:
+            continue
+        return cell.get("execution_count") is not None and not any(
+            output.get("output_type") == "error" for output in (cell.get("outputs", []) or [])
+        )
+    return False
+
+
+def _python_ast_for_notebook_cell(text: str) -> ast.Module | None:
+    """Parse Python from a cell while tolerating IPython line magics/shell lines."""
+
+    python_lines = [
+        "pass" if line.lstrip().startswith(("%", "!")) else line
+        for line in text.splitlines()
+    ]
+    try:
+        return ast.parse("\n".join(python_lines))
+    except SyntaxError:
+        return None
+
+
+def notebook_has_exact_scatter_plot(content: str) -> bool:
+    """Check the source-prescribed -50..50 Plotly scatter and fig.show()."""
+
+    code = notebook_code(content)
+    tree = _python_ast_for_notebook_cell(code)
+    if tree is None:
+        return False
+
+    exact_range = False
+    scatter_assigned_to_fig = False
+    fig_show = False
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Call):
+            if (
+                isinstance(node.func, ast.Attribute)
+                and node.func.attr == "show"
+                and isinstance(node.func.value, ast.Name)
+                and node.func.value.id == "fig"
+            ):
+                fig_show = True
+        if not isinstance(node, (ast.Assign, ast.AnnAssign)):
+            continue
+        value = node.value
+        targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+        if (
+            isinstance(value, ast.Call)
+            and (
+                (isinstance(value.func, ast.Attribute) and value.func.attr == "linspace")
+                or (isinstance(value.func, ast.Name) and value.func.id == "linspace")
+            )
+            and any(isinstance(target, ast.Name) and target.id == "x" for target in targets)
+        ):
+            values: dict[str, ast.AST] = {}
+            if value.args:
+                values["start"] = value.args[0]
+            if len(value.args) > 1:
+                values["stop"] = value.args[1]
+            values.update(
+                {keyword.arg: keyword.value for keyword in value.keywords if keyword.arg}
+            )
+            try:
+                start = ast.literal_eval(values["start"])
+                stop = ast.literal_eval(values["stop"])
+            except (KeyError, ValueError, TypeError):
+                pass
+            else:
+                exact_range = exact_range or (
+                    not isinstance(start, bool)
+                    and not isinstance(stop, bool)
+                    and start == -50
+                    and stop == 50
+                )
+        if not (
+            isinstance(value, ast.Call)
+            and isinstance(value.func, ast.Attribute)
+            and value.func.attr == "scatter"
+        ):
+            continue
+        scatter_assigned_to_fig = scatter_assigned_to_fig or any(
+            isinstance(target, ast.Name) and target.id == "fig" for target in targets
+        )
+    return exact_range and scatter_assigned_to_fig and fig_show
+
+
+def notebook_executed_joblib_save_cell(content: str) -> bool:
+    """Verify Task 08's marked cell performs the learner-owned exact save call."""
+
+    try:
+        document = json.loads(content)
+    except (json.JSONDecodeError, TypeError):
+        return False
+    marker = "# saving THE JOBLIB Model file"
+    expected_path = "/opt/app-root/src/AI26X-apps/carido-model.joblib"
+    for cell in document.get("cells", []) or []:
+        if cell.get("cell_type") != "code" or cell.get("execution_count") is None:
+            continue
+        source = cell.get("source", "")
+        text = "".join(source) if isinstance(source, list) else str(source)
+        if not text.lstrip().startswith(marker) or not re.search(
+            r"(?m)^\s*%run\s+/opt/app-root/src/train_carido_model\.py\s*$", text
+        ):
+            continue
+        if any(
+            output.get("output_type") == "error" for output in (cell.get("outputs", []) or [])
+        ):
+            continue
+        tree = _python_ast_for_notebook_cell(text)
+        if tree is None:
+            continue
+        imports_joblib = any(
+            isinstance(node, ast.Import)
+            and any(alias.name == "joblib" and alias.asname in {None, "joblib"} for alias in node.names)
+            for node in ast.walk(tree)
+        )
+        exact_dump = any(
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and isinstance(node.func.value, ast.Name)
+            and node.func.value.id == "joblib"
+            and node.func.attr == "dump"
+            and len(node.args) >= 2
+            and isinstance(node.args[0], ast.Name)
+            and node.args[0].id == "ml_model"
+            and isinstance(node.args[1], ast.Constant)
+            and node.args[1].value == expected_path
+            for node in ast.walk(tree)
+        )
+        if imports_joblib and exact_dump:
+            return True
+    return False
+
+
+def notebook_executed_s3_transfer(
+    content: str,
+    method: str,
+    object_key: str,
+    *required_strings: str,
+) -> bool:
+    """Find an error-free executed boto3 transfer call for the exact object key."""
+
+    try:
+        document = json.loads(content)
+    except (json.JSONDecodeError, TypeError):
+        return False
+    for cell in document.get("cells", []) or []:
+        if cell.get("cell_type") != "code" or cell.get("execution_count") is None:
+            continue
+        if any(
+            output.get("output_type") == "error" for output in (cell.get("outputs", []) or [])
+        ):
+            continue
+        source = cell.get("source", "")
+        text = "".join(source) if isinstance(source, list) else str(source)
+        tree = _python_ast_for_notebook_cell(text)
+        if tree is None:
+            continue
+        for node in ast.walk(tree):
+            if not (
+                isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Attribute)
+                and node.func.attr == method
+            ):
+                continue
+            arguments = list(node.args) + [keyword.value for keyword in node.keywords]
+            literal_arguments = {
+                str(argument.value)
+                for argument in arguments
+                if isinstance(argument, ast.Constant) and isinstance(argument.value, str)
+            }
+            if object_key in literal_arguments and all(
+                required in literal_arguments for required in required_strings
+            ):
+                return True
+    return False
+
+
+def notebook_has_saved_output(content: str) -> bool:
+    try:
+        document = json.loads(content)
+    except (json.JSONDecodeError, TypeError):
+        return False
+    for cell in document.get("cells", []) or []:
+        if cell.get("cell_type") != "code" or cell.get("execution_count") is None:
+            continue
+        source = cell.get("source", "")
+        text = "".join(source) if isinstance(source, list) else str(source)
+        if not text.strip():
+            continue
+        outputs = cell.get("outputs", []) or []
+        if outputs and not any(output.get("output_type") == "error" for output in outputs):
+            return True
+    return False
+
+
+def notebook_cell_has_saved_output(content: str, markers: tuple[str, ...]) -> bool:
+    try:
+        document = json.loads(content)
+    except (json.JSONDecodeError, TypeError):
+        return False
+    for cell in document.get("cells", []) or []:
+        if cell.get("cell_type") != "code" or cell.get("execution_count") is None:
+            continue
+        source = cell.get("source", "")
+        text = "".join(source) if isinstance(source, list) else str(source)
+        if not all(marker in text for marker in markers):
+            continue
+        outputs = cell.get("outputs", []) or []
+        return bool(outputs) and not any(
+            output.get("output_type") == "error" for output in outputs
+        )
+    return False
+
+
+def requirement_pinned(path: Path, package: str, version: str) -> bool:
+    if not path.is_file():
+        return False
+    expected = f"{package.lower()}=={version}"
+    for line in path.read_text(encoding="utf-8", errors="ignore").splitlines():
+        value = line.split("#", 1)[0].strip().lower().replace(" ", "")
+        if value == expected:
+            return True
+    return False
+
+
+def local_image_tags_same(images: tuple[str, ...]) -> bool:
+    image_ids: list[str] = []
+    for image in images:
         try:
-            decoded = base64.b64decode(data[key]).decode("utf-8", errors="ignore")
-        except Exception:
+            result = subprocess.run(
+                ["podman", "image", "inspect", "--format", "{{.Id}}", image],
+                check=False,
+                capture_output=True,
+                text=True,
+                timeout=20,
+            )
+        except (OSError, subprocess.TimeoutExpired):
             return False
-        if not non_todo(decoded):
+        image_id = result.stdout.strip()
+        if result.returncode or not image_id:
+            return False
+        image_ids.append(image_id)
+    return len(image_ids) == len(images) and len(set(image_ids)) == 1
+
+
+def image_catalog_item(
+    image_stream: dict[str, Any] | None,
+    annotation_key: str,
+    name: str,
+    version: str,
+) -> bool:
+    for tag in dig(image_stream, "spec", "tags", default=[]) or []:
+        raw = str(dig(tag, "annotations", annotation_key, default=""))
+        try:
+            dependencies = json.loads(raw)
+        except json.JSONDecodeError:
+            dependencies = []
+        if any(
+            str(item.get("name", "")).lower() == name.lower()
+            and str(item.get("version", "")) == version
+            for item in dependencies
+            if isinstance(item, dict)
+        ):
+            return True
+    return False
+
+
+def image_dependency(image_stream: dict[str, Any] | None, name: str, version: str) -> bool:
+    return image_catalog_item(
+        image_stream,
+        "opendatahub.io/notebook-python-dependencies",
+        name,
+        version,
+    )
+
+
+def image_software(image_stream: dict[str, Any] | None, name: str, version: str) -> bool:
+    return image_catalog_item(
+        image_stream,
+        "opendatahub.io/notebook-software",
+        name,
+        version,
+    )
+
+
+def image_annotation_is(image_stream: dict[str, Any] | None, key: str, value: str) -> bool:
+    candidates = [annotations(image_stream)]
+    candidates.extend(
+        dig(tag, "annotations", default={}) or {}
+        for tag in (dig(image_stream, "spec", "tags", default=[]) or [])
+    )
+    return any(candidate.get(key) == value for candidate in candidates)
+
+
+def dspa_ready(resource: dict[str, Any] | None) -> bool:
+    if ready(resource):
+        return True
+    conditions = dig(resource, "status", "conditions", default=[]) or []
+    required = {"APIServerReady", "PersistenceAgentReady", "ScheduledWorkflowReady"}
+    truthy = {
+        str(item.get("type"))
+        for item in conditions
+        if str(item.get("status", "")).lower() == "true"
+    }
+    return required <= truthy
+
+
+def workflow_named(workflow: dict[str, Any], run_name: str) -> bool:
+    def canonical(value: Any) -> str:
+        return re.sub(r"[^a-z0-9]+", "-", str(value).lower()).strip("-")
+
+    expected = canonical(run_name)
+    metadata = workflow.get("metadata", {}) or {}
+    values = [metadata.get("name", "")]
+    values.extend(str(value) for value in (metadata.get("annotations", {}) or {}).values())
+    values.extend(str(value) for value in (metadata.get("labels", {}) or {}).values())
+    return any(
+        canonical(value) == expected or canonical(value).startswith(f"{expected}-")
+        for value in values
+    )
+
+
+def schedule_is_enabled_five_minutes(resource: dict[str, Any]) -> bool:
+    enabled = dig(resource, "spec", "enabled", default=None)
+    if enabled not in {True, "true", "True"}:
+        return False
+    interval = dig(resource, "spec", "trigger", "periodicSchedule", "intervalSecond")
+    return str(interval) == "300"
+
+
+def schedule_references_pipeline(resource: dict[str, Any], pipeline_name: str) -> bool:
+    """Match the KFP ScheduledWorkflow pipeline-name field without substring guesses."""
+
+    expected = re.sub(r"[^a-z0-9]+", "-", pipeline_name.lower()).strip("-")
+    candidates = [
+        dig(resource, "spec", "pipelineSpec", "pipelineName"),
+        dig(resource, "spec", "pipelineSpec", "pipeline_name"),
+        dig(resource, "spec", "pipelineName"),
+        dig(resource, "spec", "pipeline_name"),
+        annotations(resource).get("pipelines.kubeflow.org/pipeline-name"),
+        labels(resource).get("pipelines.kubeflow.org/pipeline-name"),
+    ]
+    return any(
+        re.sub(r"[^a-z0-9]+", "-", str(candidate).lower()).strip("-") == expected
+        for candidate in candidates
+        if candidate not in {None, ""}
+    )
+
+
+def workflow_links_to_schedule(workflow: dict[str, Any], schedule: dict[str, Any]) -> bool:
+    if phase(workflow).lower() != "succeeded":
+        return False
+    schedule_name = resource_name(schedule)
+    if schedule_name:
+        completed = dig(
+            schedule,
+            "status",
+            "workflowHistory",
+            "completed",
+            default=[],
+        ) or []
+        if any(item.get("name") == resource_name(workflow) for item in completed):
+            return True
+        for owner in dig(workflow, "metadata", "ownerReferences", default=[]) or []:
+            if owner.get("name") == schedule_name:
+                return True
+        metadata = workflow.get("metadata", {}) or {}
+        values = list((metadata.get("annotations", {}) or {}).values())
+        values.extend((metadata.get("labels", {}) or {}).values())
+        if any(str(value) == schedule_name for value in values):
+            return True
+    return False
+
+
+def compiled_kfp_ir_matches(content: str, pipeline_name: str, sdk_version: str) -> bool:
+    name_pattern = re.compile(
+        rf"(?m)^\s*name:\s*['\"]?{re.escape(pipeline_name)}['\"]?\s*$"
+    )
+    sdk_pattern = re.compile(
+        rf"(?m)^\s*sdkVersion:\s*['\"]?kfp-{re.escape(sdk_version)}['\"]?\s*$"
+    )
+    return bool(content.strip() and name_pattern.search(content) and sdk_pattern.search(content))
+
+
+def read_text_if_file(path: str) -> str:
+    candidate = Path(path)
+    if not candidate.is_file():
+        return ""
+    return candidate.read_text(encoding="utf-8", errors="ignore")
+
+
+def _canonical_kfp_task_name(value: Any) -> str:
+    return re.sub(r"[^a-z0-9]+", "-", str(value).lower()).strip("-")
+
+
+def _collect_kfp_task_dependencies(value: Any, result: set[str]) -> None:
+    """Collect explicit and channel-implied dependencies from one KFP v2 task."""
+
+    if isinstance(value, dict):
+        for key, nested in value.items():
+            if key == "producerTask" and isinstance(nested, str):
+                result.add(_canonical_kfp_task_name(nested))
+            elif key == "dependentTasks":
+                if isinstance(nested, list):
+                    result.update(
+                        _canonical_kfp_task_name(item)
+                        for item in nested
+                        if isinstance(item, str)
+                    )
+                elif isinstance(nested, str):
+                    result.add(_canonical_kfp_task_name(nested))
+            _collect_kfp_task_dependencies(nested, result)
+    elif isinstance(value, list):
+        for nested in value:
+            _collect_kfp_task_dependencies(nested, result)
+
+
+def _kfp_root_task_dependencies_text(content: str) -> dict[str, set[str]]:
+    """Parse the stable root DAG subset of KFP v2 YAML without PyYAML."""
+
+    lines = content.splitlines()
+
+    def key_line(index: int) -> tuple[int, str] | None:
+        match = re.match(r"^(\s*)([A-Za-z0-9_.-]+):\s*(?:#.*)?$", lines[index])
+        return (len(match.group(1)), match.group(2)) if match else None
+
+    def block_end(start: int, indent: int, limit: int) -> int:
+        for index in range(start + 1, limit):
+            if not lines[index].strip() or lines[index].lstrip().startswith("#"):
+                continue
+            current_indent = len(lines[index]) - len(lines[index].lstrip())
+            if current_indent <= indent:
+                return index
+        return limit
+
+    def direct_child(
+        key: str,
+        parent_start: int,
+        parent_indent: int,
+        parent_end: int,
+    ) -> tuple[int, int] | None:
+        child_indent = parent_indent + 2
+        for index in range(parent_start + 1, parent_end):
+            if key_line(index) == (child_indent, key):
+                return index, block_end(index, child_indent, parent_end)
+        return None
+
+    root = next(
+        (
+            (index, block_end(index, 0, len(lines)))
+            for index in range(len(lines))
+            if key_line(index) == (0, "root")
+        ),
+        None,
+    )
+    if root is None:
+        return {}
+    dag = direct_child("dag", root[0], 0, root[1])
+    if dag is None:
+        return {}
+    tasks = direct_child("tasks", dag[0], 2, dag[1])
+    if tasks is None:
+        return {}
+
+    headings = [
+        (index, parsed[1])
+        for index in range(tasks[0] + 1, tasks[1])
+        if (parsed := key_line(index)) is not None and parsed[0] == 6
+    ]
+    result: dict[str, set[str]] = {}
+    for heading_index, (start, task_name) in enumerate(headings):
+        end = headings[heading_index + 1][0] if heading_index + 1 < len(headings) else tasks[1]
+        dependencies: set[str] = set()
+        dependent_indent: int | None = None
+        for index in range(start + 1, end):
+            line = lines[index]
+            producer = re.match(
+                r"^\s*producerTask:\s*['\"]?([^'\"\s#]+)['\"]?\s*(?:#.*)?$",
+                line,
+            )
+            if producer:
+                dependencies.add(_canonical_kfp_task_name(producer.group(1)))
+            dependent = re.match(r"^(\s*)dependentTasks:\s*(.*?)\s*$", line)
+            if dependent:
+                dependent_indent = len(dependent.group(1))
+                inline = dependent.group(2).strip()
+                if inline.startswith("[") and inline.endswith("]"):
+                    dependencies.update(
+                        _canonical_kfp_task_name(item.strip(" '\""))
+                        for item in inline[1:-1].split(",")
+                        if item.strip(" '\"")
+                    )
+                continue
+            if dependent_indent is not None:
+                item = re.match(
+                    r"^\s*-\s*['\"]?([^'\"\s#]+)['\"]?\s*(?:#.*)?$",
+                    line,
+                )
+                if item:
+                    dependencies.add(_canonical_kfp_task_name(item.group(1)))
+                    continue
+                if line.strip() and len(line) - len(line.lstrip()) <= dependent_indent:
+                    dependent_indent = None
+        canonical_name = _canonical_kfp_task_name(task_name)
+        if not canonical_name or canonical_name in result:
+            return {}
+        result[canonical_name] = dependencies
+    return result
+
+
+def _kfp_root_task_dependencies(content: str) -> dict[str, set[str]]:
+    """Return root DAG task dependencies from a compiled KFP v2 IR document."""
+
+    try:
+        import yaml  # type: ignore[import-not-found]
+    except ImportError:
+        return _kfp_root_task_dependencies_text(content)
+    try:
+        document = yaml.safe_load(content)
+    except yaml.YAMLError:
+        return _kfp_root_task_dependencies_text(content)
+    if not isinstance(document, dict):
+        return {}
+    root_tasks = dig(document, "root", "dag", "tasks", default={})
+    if not isinstance(root_tasks, dict):
+        return {}
+
+    result: dict[str, set[str]] = {}
+    for task_key, task_spec in root_tasks.items():
+        if not isinstance(task_spec, dict):
+            return {}
+        task_name = dig(task_spec, "taskInfo", "name", default=task_key)
+        canonical_name = _canonical_kfp_task_name(task_name)
+        if not canonical_name or canonical_name in result:
+            return {}
+        dependencies: set[str] = set()
+        _collect_kfp_task_dependencies(task_spec, dependencies)
+        result[canonical_name] = dependencies
+    return result
+
+
+def compiled_pipeline_has_ordered_chain(content: str, component_names: list[str]) -> bool:
+    """Verify the required KFP v2 root tasks form the requested ordered chain.
+
+    KFP records ordering either in ``dependentTasks`` (for ``.after()``) or in
+    input channels via ``producerTask``. Every stage after the first must
+    consume or depend on its immediate predecessor, and no stage may depend on
+    itself or a later required stage.
+    """
+
+    expected = [_canonical_kfp_task_name(name) for name in component_names]
+    if len(expected) != len(set(expected)) or any(not name for name in expected):
+        return False
+    task_dependencies = _kfp_root_task_dependencies(content)
+    if not all(name in task_dependencies for name in expected):
+        return False
+
+    positions = {name: index for index, name in enumerate(expected)}
+    for index, name in enumerate(expected):
+        required_dependencies = {
+            dependency
+            for dependency in task_dependencies[name]
+            if dependency in positions
+        }
+        if any(positions[dependency] >= index for dependency in required_dependencies):
+            return False
+        if index and expected[index - 1] not in required_dependencies:
             return False
     return True
 
 
-def secret_data_matches(
-    actual: dict[str, Any] | None,
-    expected: dict[str, Any] | None,
-    keys: list[str],
-) -> bool:
-    """Compare encoded Secret values without decoding or printing credentials."""
-    if not actual or not expected:
+def workflow_stages_succeeded(workflow: dict[str, Any], stage_names: list[str]) -> bool:
+    nodes = dig(workflow, "status", "nodes", default={}) or {}
+    if not isinstance(nodes, dict):
         return False
-    actual_data = actual.get("data", {}) or {}
-    expected_data = expected.get("data", {}) or {}
-    return all(
-        non_todo(actual_data.get(key))
-        and actual_data.get(key) == expected_data.get(key)
-        for key in keys
-    )
+
+    def canonical(value: Any) -> str:
+        return re.sub(r"[^a-z0-9]+", "-", str(value).lower()).strip("-")
+
+    succeeded: set[str] = set()
+    expected = {canonical(name) for name in stage_names}
+    for node in nodes.values():
+        if str(node.get("phase", "")).lower() != "succeeded":
+            continue
+        candidates = {
+            canonical(node.get("displayName", "")),
+            canonical(node.get("name", "")),
+            canonical(node.get("templateName", "")),
+        }
+        for stage in expected:
+            if any(value == stage or value.startswith(f"{stage}-") for value in candidates):
+                succeeded.add(stage)
+    return succeeded == expected
 
 
-def result(check_id: str, description: str, points: int, passed: bool, detail: str) -> Result:
-    return Result(check_id, description, points, bool(passed), detail)
-
-
-def grade_01(oc: Oc, ns: str) -> list[Result]:
-    user_group = oc.get("group", "devops-wala")
-    admin_group = oc.get("group", "rhoai-exam-admins")
-    user_members = set(user_group.get("users", []) if user_group else [])
-    admin_members = set(admin_group.get("users", []) if admin_group else [])
-    auth = oc.get("auth.services.platform.opendatahub.io", "auth") \
-        or oc.get("auth.services.platform.opendatahub.io", "auth", "redhat-ods-applications")
-    allowed_groups = set(dig(auth, "spec", "allowedGroups", default=[]) or [])
-    admin_groups = set(dig(auth, "spec", "adminGroups", default=[]) or [])
-    managed_groups = all(
-        dig(group, "metadata", "labels", "ex267.practice/task", default="") == "01"
-        for group in (user_group, admin_group) if group
-    ) and user_group is not None and admin_group is not None
-    r2 = user_members == {"developer", "rajan", "punit"} \
-        and admin_members == {"raja", "andrew"} \
-        and "devops-wala" in allowed_groups \
-        and "rhoai-exam-admins" in admin_groups \
-        and "system:authenticated" not in allowed_groups \
-        and managed_groups
-
-    namespace = oc.get("namespace", ns)
-    labels = dig(namespace, "metadata", "labels", default={}) or {}
-    r3 = labels.get("team") == "northstar-risk" and labels.get("environment") == "exam"
-
-    rolebindings = oc.list("rolebinding", ns)
-    roles_by_user: dict[str, list[str]] = {}
-    for binding in rolebindings:
-        subjects = binding.get("subjects", []) or []
-        role_name = dig(binding, "roleRef", "name", default="")
-        for subject in subjects:
-            if subject.get("kind") == "User":
-                roles_by_user.setdefault(subject.get("name", ""), []).append(role_name)
-    developer_roles = roles_by_user.get("developer1", [])
-    r4 = "edit" in developer_roles and not ({"admin", "cluster-admin"} & set(developer_roles))
-    r5 = all("admin" in roles_by_user.get(name, []) for name in ("rajan", "punit")) \
-        and "edit" in roles_by_user.get("suraj", []) \
-        and not any("cluster-admin" in roles_by_user.get(name, []) for name in ("rajan", "punit", "suraj"))
-
-    connection = oc.get("secret", "fraud-s3", ns)
-    provided_connection = oc.get("secret", "exam-provided-minio", ns)
-    annotation = dig(connection, "metadata", "annotations", "opendatahub.io/connection-type-protocol")
-    s3_keys = ["AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_S3_ENDPOINT", "AWS_S3_BUCKET"]
-    r6 = annotation == "s3" \
-        and secret_values_are_real(connection, s3_keys) \
-        and secret_data_matches(connection, provided_connection, s3_keys)
-
-    evidence = cm_data(oc, "fraud-s3-evidence", ns)
-    r7 = has_values(evidence, ["input_key", "output_key", "input_sha256", "output_sha256", "verified_from_new_process"]) \
-        and is_sha(evidence.get("input_sha256")) and is_sha(evidence.get("output_sha256")) \
-        and evidence.get("input_key") != evidence.get("output_key") \
-        and evidence.get("verified_from_new_process", "").lower() == "true"
-
-    r8 = bool(auth) and allowed_groups == {"devops-wala"} \
-        and admin_groups == {"rhoai-exam-admins"}
-
-    return [
-        result("01-1", "사용자·관리자 그룹 구성과 Auth 연결", 3, r2, f"users={sorted(user_members)}, admins={sorted(admin_members)}"),
-        result("01-2", "프로젝트 팀·환경 라벨", 3, r3, "team=northstar-risk, environment=exam"),
-        result("01-3", "developer1 최소 권한 edit RoleBinding", 3, r4, f"roles={developer_roles or ['none']}"),
-        result("01-4", "rajan·punit admin, suraj edit 프로젝트 협업 권한", 3, r5, "namespace 범위 RoleBinding"),
-        result("01-5", "fraud-s3 protocol·endpoint·bucket·Secret", 3, r6, "Secret 값은 출력하지 않음"),
-        result("01-6", "새 프로세스 read/write SHA-256 증적", 3, r7, "fraud-s3-evidence ConfigMap"),
-        result("01-7", "Dashboard 접근 allowlist가 지정 두 그룹으로 제한됨", 3, r8, "Auth/auth"),
-    ]
-
-
-def grade_02(oc: Oc, ns: str) -> list[Result]:
-    image_stream = oc.get("imagestream", "custom-workbench", ns)
-    tags = dig(image_stream, "spec", "tags", default=[]) or []
-    image_tag = next((item for item in tags if item.get("name") == "1.0"), {})
-    tag_annotations = image_tag.get("annotations", {}) or {}
-    dependencies = str(tag_annotations.get("opendatahub.io/notebook-python-dependencies", "")).lower()
-    image_labels = dig(image_stream, "metadata", "labels", default={}) or {}
-    r1 = image_stream is not None \
-        and image_labels.get("opendatahub.io/notebook-image") == "true" \
-        and "seaborn" in dependencies and "0.12.2" in dependencies \
-        and "python-json-logger" in dependencies and "2.0.7" in dependencies \
-        and non_todo(dig(image_tag, "from", "name", default=""))
-
-    notebook = oc.get("notebook", "risk-lab", ns)
-    container = dig(notebook, "spec", "template", "spec", "containers", 0, default={}) or {}
-    image = container.get("image", "")
-    custom_image = cm_data(oc, "custom-image-evidence", ns)
-    culler_resource = oc.get("configmap", "notebook-controller-culler-config", "redhat-ods-applications")
-    culler = dig(culler_resource, "data", default={}) or {}
-    r2 = "custom-workbench" in image.lower() \
-        and is_sha(custom_image.get("image_digest")) \
-        and custom_image.get("seaborn_version") == "0.12.2" \
-        and custom_image.get("python_json_logger_version") == "2.0.7" \
-        and custom_image.get("idle_culling_endpoint_verified", "").lower() == "true" \
-        and culler.get("ENABLE_CULLING", "").lower() == "true" \
-        and culler.get("CULL_IDLE_TIME") == "240" \
-        and culler.get("IDLENESS_CHECK_PERIOD") == "1" \
-        and dig(culler_resource, "metadata", "labels", "ex267.practice/task", default="") == "02"
-
-    volumes = dig(notebook, "spec", "template", "spec", "volumes", default=[]) or []
-    mounts = container.get("volumeMounts", []) or []
-    claim_names = [dig(volume, "persistentVolumeClaim", "claimName") for volume in volumes]
-    storage_claim = next((name for name in claim_names if name), None)
-    pvc = oc.get("pvc", storage_claim, ns) if storage_claim else None
-    storage = dig(pvc, "spec", "resources", "requests", "storage", default="")
-    mounted = any(mount.get("mountPath") == "/opt/app-root/src" for mount in mounts)
-    r3 = storage in {"10Gi", "10240Mi"} and mounted
-
-    resources = container.get("resources", {}) or {}
-    requests = resources.get("requests", {}) or {}
-    limits = resources.get("limits", {}) or {}
-    r4 = requests.get("cpu") in {"1", "1000m"} \
-        and requests.get("memory") in {"1Gi", "1024Mi"} \
-        and limits.get("cpu") in {"2", "2000m"} \
-        and limits.get("memory") in {"2Gi", "2048Mi"}
-
-    medium_small = oc.get("hardwareprofile", "medium-small", ns)
-    my_medium = oc.get("hardwareprofile", "my-medium", ns)
-    medium_ids = {item.get("identifier"): item for item in (dig(medium_small, "spec", "identifiers", default=[]) or [])}
-    my_ids = {item.get("identifier"): item for item in (dig(my_medium, "spec", "identifiers", default=[]) or [])}
-    r5 = str(dig(medium_ids, "cpu", "minCount", default="")) == "1" \
-        and str(dig(medium_ids, "cpu", "maxCount", default="")) == "2" \
-        and str(dig(medium_ids, "memory", "minCount", default="")) == "16Gi" \
-        and str(dig(medium_ids, "memory", "maxCount", default="")) == "16Gi" \
-        and str(dig(my_ids, "cpu", "minCount", default="")) == "1" \
-        and str(dig(my_ids, "cpu", "maxCount", default="")) == "2" \
-        and str(dig(my_ids, "memory", "minCount", default="")) == "1Gi" \
-        and str(dig(my_ids, "memory", "maxCount", default="")) == "2Gi"
-
-    existing = oc.get("notebook", "git-experiments", ns)
-    existing_container = dig(existing, "spec", "template", "spec", "containers", 0, default={}) or {}
-    env_configmaps = {
-        dig(item, "configMapRef", "name")
-        for item in existing_container.get("envFrom", []) or []
-        if dig(item, "configMapRef", "name")
-    }
-    env_cm = oc.get("configmap", "git-experiments-env", ns)
-    admin_evidence = cm_data(oc, "workbench-admin-evidence", ns)
-    r6 = "cuda" in str(existing_container.get("image", "")).lower() \
-        and "git-experiments-env" in env_configmaps \
-        and dig(env_cm, "data", "RANDOM_SIZE") == "40" \
-        and admin_evidence.get("stopped_after_test", "").lower() == "true"
-
-    git_evidence = cm_data(oc, "git-collaboration-evidence", ns)
-    r7 = git_evidence.get("repository") == "https://github.com/RedHatTraining/AI26X-apps" \
-        and git_evidence.get("source_branch") == "RHOAI3.3" \
-        and git_evidence.get("feature_branch") in {"experiment", "experiment2"} \
-        and is_git_sha(git_evidence.get("feature_commit")) \
-        and is_git_sha(git_evidence.get("merge_commit")) \
-        and is_sha(git_evidence.get("experiment_notebook_sha256")) \
-        and git_evidence.get("clean_worktree", "").lower() == "true"
-
-    connection = oc.get("secret", "projects-data-connection", ns)
-    connection_annotation = dig(connection, "metadata", "annotations", "opendatahub.io/connection-type-protocol")
-    notebook_annotations = dig(notebook, "metadata", "annotations", default={}) or {}
-    connection_refs = str(notebook_annotations.get("opendatahub.io/connections", "")) \
-        + json.dumps(container.get("envFrom", []), ensure_ascii=False)
-    r8 = connection_annotation == "s3" \
-        and secret_values_are_real(connection, ["AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_S3_ENDPOINT", "AWS_S3_BUCKET"]) \
-        and "projects-data-connection" in connection_refs
-
-    s3_evidence = cm_data(oc, "workbench-s3-evidence", ns)
-    r9 = has_values(s3_evidence, ["upload_key", "download_sha256"]) \
-        and is_sha(s3_evidence.get("download_sha256")) \
-        and s3_evidence.get("verified_from_workbench", "").lower() == "true"
-
-    evidence = cm_data(oc, "workbench-evidence", ns)
-    reproducible = has_values(evidence, ["git_revision", "data_version", "seed", "image_digest", "artifact_uri"]) \
-        and is_sha(evidence.get("image_digest"))
+def s3_fixture_object_exists(bucket: str, key: str) -> bool:
+    helper = ROOT / "tasks" / "common" / "s3_fixture.py"
+    if not helper.is_file() or not key:
+        return False
     try:
-        runs = int(evidence.get("tensorboard_runs", "0"))
-    except ValueError:
-        runs = 0
-    r10 = reproducible and runs >= 2 and evidence.get("restart_proof", "").lower() == "true"
-
-    return [
-        result("02-1", "custom-workbench:1.0 build·catalog metadata", 3, r1, "seaborn 0.12.2, python-json-logger 2.0.7"),
-        result("02-2", "risk-lab custom image 실행·package·culling 검증", 3, r2, image or "Notebook 없음"),
-        result("02-3", "10Gi PVC와 /opt/app-root/src mount", 3, r3, f"claim={storage_claim}, size={storage or 'none'}"),
-        result("02-4", "My-medium 1/2 CPU·1/2Gi 적용", 3, r4, json.dumps(resources, ensure_ascii=False)),
-        result("02-5", "MediumSmall·My-medium HardwareProfile", 3, r5, "legacy size selector의 3.3 대응"),
-        result("02-6", "기존 git-experiments를 CUDA·ConfigMap으로 수정 후 중지", 3, r6, "RANDOM_SIZE=40"),
-        result("02-7", "Jupyter Git feature branch·commit·merge", 3, r7, "git-collaboration-evidence"),
-        result("02-8", "Workbench S3 connection 연결", 3, r8, "projects-data-connection"),
-        result("02-9", "Workbench에서 S3 upload·download 검증", 3, r9, "workbench-s3-evidence"),
-        result("02-10", "재현 metadata·재시작·TensorBoard 2개 run", 3, r10, f"runs={runs}"),
-    ]
+        helper_module = runpy.run_path(str(helper), run_name="ai267_s3_fixture")
+        status, body = helper_module["signed_request"]("GET", bucket, key)
+    except (Exception, SystemExit):
+        return False
+    return status == 200 and bool(body)
 
 
-def grade_03(oc: Oc, ns: str) -> list[Result]:
-    dspa = oc.get("dspa", "dspa", ns)
-    r1 = condition_true(dspa) or all(
-        str(condition.get("status", "")).lower() == "true"
-        for condition in (dig(dspa, "status", "conditions", default=[]) or [])
-    ) and bool(dig(dspa, "status", "conditions", default=[]))
-
-    pipeline = oc.get("configmap", "fraud-training-pipeline", ns)
-    pipeline_text = "\n".join((pipeline or {}).get("data", {}).values()).lower()
-    r2 = all(name in pipeline_text for name in ("validate", "train", "evaluate"))
-    sdk_version = dig(pipeline, "metadata", "annotations", "ex267.io/kfp-sdk", default="")
-    r3 = bool(re.match(r"^2\.(?:1[4-9]|[2-9][0-9])(?:\.|$)", sdk_version)) and non_todo(pipeline_text)
-
-    evidence = cm_data(oc, "pipeline-evidence", ns)
-    r4 = has_values(evidence, ["service_account", "secret_name", "resources_verified"]) \
-        and evidence.get("resources_verified", "").lower() == "true"
-    r5 = has_values(evidence, ["cache_policy", "retry_policy", "artifact_prefix_pattern"])
-
-    workflows = [workflow for workflow in oc.list("workflow", ns) if dig(workflow, "status", "phase") == "Succeeded"]
-    depths = {dig(workflow, "metadata", "labels", "ex267.io/max-depth") for workflow in workflows}
-    depths.discard(None)
-    r6 = len(workflows) >= 2 and len(depths) >= 2 \
-        and has_values(evidence, ["approved_model_uri", "approved_model_sha256"]) \
-        and is_sha(evidence.get("approved_model_sha256"))
-
-    scheduled = oc.list("scheduledworkflow", ns) + oc.list("cronworkflow", ns)
-    schedule_evidence = cm_data(oc, "schedule-evidence", ns)
-    interval = schedule_evidence.get("interval_seconds", "")
-    schedule_name = schedule_evidence.get("schedule_name", "")
-    scheduled_names = {dig(item, "metadata", "name", default="") for item in scheduled}
-    scheduled_succeeded = any(
-        dig(workflow, "metadata", "labels", "ex267.io/scheduled-run", default="").lower() == "true"
-        for workflow in workflows
-    )
-    r7 = schedule_evidence.get("pipeline_name") == "tas1-devops-wala" \
-        and schedule_name == "tas1-devops-wala-s1" \
-        and interval == "300" \
-        and schedule_evidence.get("enabled", "").lower() == "true" \
-        and non_todo(schedule_evidence.get("observed_run")) \
-        and bool(scheduled) \
-        and (schedule_name in scheduled_names or any("tas1-devops-wala" in name for name in scheduled_names)) \
-        and scheduled_succeeded
-
-    elyra_notebook = oc.get("notebook", "pipelines-elyra-wb", ns)
-    elyra_container = dig(elyra_notebook, "spec", "template", "spec", "containers", 0, default={}) or {}
-    elyra_volumes = dig(elyra_notebook, "spec", "template", "spec", "volumes", default=[]) or []
-    elyra_claim = next(
-        (dig(volume, "persistentVolumeClaim", "claimName") for volume in elyra_volumes
-         if dig(volume, "persistentVolumeClaim", "claimName")),
-        None,
-    )
-    elyra_pvc = oc.get("pvc", elyra_claim, ns) if elyra_claim else None
-    elyra_size = dig(elyra_pvc, "spec", "resources", "requests", "storage", default="")
-    elyra = cm_data(oc, "elyra-evidence", ns)
-    elyra_image = str(elyra_container.get("image", "")).lower()
-    r8 = elyra_notebook is not None \
-        and elyra_size in {"10Gi", "10240Mi"} \
-        and ("standard" in elyra_image or "datascience" in elyra_image) \
-        and elyra.get("pipeline_file") == "issues_prediction.pipeline" \
-        and elyra.get("workbench_name") == "pipelines-elyra-wb" \
-        and elyra.get("workbench_pvc") == elyra_claim \
-        and "forecast-pipeline-runtime" in elyra.get("runtime_image", "") \
-        and elyra.get("secret_name") == "aws-connection-fraud-s3" \
-        and is_git_sha(elyra.get("git_revision")) \
-        and non_todo(elyra.get("workflow_name"))
-
-    elyra_workflow = next(
-        (workflow for workflow in workflows
-         if dig(workflow, "metadata", "name", default="") == elyra.get("workflow_name")),
-        None,
-    )
-    r9 = elyra_workflow is not None \
-        and all(is_sha(elyra.get(key)) for key in (
-            "data_csv_sha256", "clean_data_csv_sha256", "forecast_data_csv_sha256"
-        )) \
-        and len({
-            str(elyra.get("data_csv_sha256", "")).removeprefix("sha256:"),
-            str(elyra.get("clean_data_csv_sha256", "")).removeprefix("sha256:"),
-            str(elyra.get("forecast_data_csv_sha256", "")).removeprefix("sha256:"),
-        }) == 3
-
-    return [
-        result("03-1", "DSPA Ready", 4, r1, "dspa/dspa"),
-        result("03-2", "validate·train·evaluate 독립 컴포넌트", 4, r2, "fraud-training-pipeline ConfigMap"),
-        result("03-3", "KFP SDK 2.14.3+ compiled definition", 4, r3, f"kfp={sdk_version or 'missing'}"),
-        result("03-4", "ServiceAccount·Secret·resources", 4, r4, "pipeline-evidence ConfigMap"),
-        result("03-5", "cache·retry·run prefix 안전성", 4, r5, "pipeline-evidence ConfigMap"),
-        result("03-6", "서로 다른 max_depth 두 run과 승인 모델", 4, r6, f"succeeded={len(workflows)}, depths={sorted(depths)}"),
-        result("03-7", "tas1-devops-wala 5분 예약과 예약 실행 성공", 4, r7, f"schedules={sorted(scheduled_names)}"),
-        result("03-8", "Standard Data Science·10Gi Elyra Workbench와 3-node 설정", 4, r8, f"claim={elyra_claim}, size={elyra_size or 'none'}"),
-        result("03-9", "Elyra 실행 성공과 세 출력 파일 SHA-256", 4, r9, elyra.get("workflow_name", "missing")),
-    ]
-
-
-def grade_04(oc: Oc, ns: str) -> list[Result]:
-    service = oc.get("inferenceservice", "fraud-v2", ns)
-    model = dig(service, "spec", "predictor", "model", default={}) or {}
-    uri = model.get("storageUri", "")
-    connection_path = dig(service, "metadata", "annotations", "opendatahub.io/connection-path", default="") \
-        or dig(model, "storage", "path", default="")
-    digest = dig(service, "metadata", "annotations", "ex267.io/model-sha256", default="")
-    r1 = ("models/fraud/2" in uri or "models/fraud/2" in connection_path) and is_sha(digest)
-
-    runtime = str(model.get("runtime", "")).lower()
-    model_format = str(dig(model, "modelFormat", "name", default="")).lower()
-    r2 = ("openvino" in runtime or "ovms" in runtime) \
-        and model_format in {"onnx", "openvino_ir", "openvino"}
-
-    resources = model.get("resources", {}) or {}
-    requests = resources.get("requests", {}) or {}
-    limits = resources.get("limits", {}) or {}
-    cpu_ok = requests.get("cpu") in {"1", "1000m"} and limits.get("cpu") in {"1", "1000m"}
-    memory_ok = requests.get("memory") in {"2Gi", "2048Mi"} and limits.get("memory") in {"2Gi", "2048Mi"}
-    r3 = cpu_ok and memory_ok
-    r4 = condition_true(service) and non_todo(dig(service, "status", "url"))
-
-    evidence = cm_data(oc, "serving-evidence", ns)
-    normal_http = evidence.get("normal_http", "")
-    invalid_http = evidence.get("invalid_shape_http", "")
-    r5 = normal_http.startswith("2") and invalid_http.startswith("4") \
-        and has_values(evidence, ["response_schema_sha256", "invalid_response_sha256"])
-    r6 = evidence.get("recreated", "").lower() == "true" \
-        and evidence.get("rollback_verified", "").lower() == "true" \
-        and is_sha(evidence.get("rollback_model_sha256"))
-
-    custom_runtime = oc.get("servingruntime", "fraud-custom-runtime", ns)
-    runtime_containers = dig(custom_runtime, "spec", "containers", default=[]) or []
-    runtime_image = dig(runtime_containers, 0, "image", default="")
-    runtime_formats = {
-        str(item.get("name", "")).lower()
-        for item in (dig(custom_runtime, "spec", "supportedModelFormats", default=[]) or [])
-    }
-    runtime_protocols = {
-        str(item).lower()
-        for item in (dig(custom_runtime, "spec", "protocolVersions", default=[]) or [])
-    }
-    runtime_evidence = cm_data(oc, "custom-runtime-evidence", ns)
-    r7 = custom_runtime is not None \
-        and bool(PINNED_IMAGE.search(runtime_image)) \
-        and "sklearn" in runtime_formats \
-        and "v2" in runtime_protocols \
-        and runtime_evidence.get("runtime_name") == "fraud-custom-runtime" \
-        and is_sha(runtime_evidence.get("runtime_image_digest")) \
-        and runtime_evidence.get("supported_format", "").lower() == "sklearn" \
-        and runtime_evidence.get("validation_http", "").startswith("2")
-
-    mode = cm_data(oc, "serving-mode-evidence", ns)
-    route = oc.get("route", "fraud-v2", ns)
-    route_host = dig(route, "spec", "host", default="")
-    deployment_mode = dig(service, "metadata", "annotations", "serving.kserve.io/deploymentMode", default="")
-    r8 = mode.get("legacy_multimodel_status") == "mapped-to-rhoai-3.3-rawdeployment" \
-        and mode.get("current_deployment_mode") == "RawDeployment" \
-        and deployment_mode == "RawDeployment" \
-        and route is not None \
-        and mode.get("external_route") == route_host
-
-    service_account = oc.get("serviceaccount", "infer-serviceaccount", ns)
-    token_secret_name = mode.get("token_secret", "")
-    token_secret = oc.get("secret", token_secret_name, ns) if non_todo(token_secret_name) else None
-    token_secret_sa = dig(token_secret, "metadata", "annotations", "kubernetes.io/service-account.name", default="")
-    token_secret_type = dig(token_secret, "type", default="")
-    r9 = service_account is not None \
-        and mode.get("token_service_account") == "infer-serviceaccount" \
-        and token_secret_type == "kubernetes.io/service-account-token" \
-        and token_secret_sa == "infer-serviceaccount" \
-        and mode.get("authenticated_http", "").startswith("2") \
-        and mode.get("unauthenticated_http", "") in {"401", "403"} \
-        and mode.get("public_http", "").startswith("2")
-
-    return [
-        result("04-1", "models/fraud/2 immutable artifact", 4, r1, f"storage={uri or connection_path or 'missing'}"),
-        result("04-2", "OpenVINO runtime·model format", 4, r2, f"runtime={runtime}, format={model_format}"),
-        result("04-3", "1 CPU·2Gi request/limit", 4, r3, json.dumps(resources, ensure_ascii=False)),
-        result("04-4", "InferenceService Ready·URL", 4, r4, "fraud-v2"),
-        result("04-5", "V2 정상·invalid shape 응답", 4, r5, f"normal={normal_http or 'none'}, invalid={invalid_http or 'none'}"),
-        result("04-6", "재생성·rollback 재검증", 4, r6, "serving-evidence ConfigMap"),
-        result("04-7", "고정 digest Custom ServingRuntime·sklearn·V2", 4, r7, runtime_image or "runtime missing"),
-        result("04-8", "2.13 Multi-model 요구를 3.3 RawDeployment·외부 Route로 검증", 4, r8, route_host or "route missing"),
-        result("04-9", "infer-serviceaccount 토큰 인증과 무인증 전환 호출", 4, r9, "Secret 값은 출력하지 않음"),
-    ]
-
-
-def workload_template(oc: Oc, ns: str) -> tuple[dict[str, Any], str]:
-    deployment = oc.get("deployment", "support-llm", ns)
-    if deployment:
-        return dig(deployment, "spec", "template", "spec", default={}) or {}, "deployment/support-llm"
-    pods = oc.list("pod", ns, "app=support-llm") or oc.list("pod", ns, "serving.kserve.io/inferenceservice=support-llm")
-    if pods:
-        return pods[0].get("spec", {}) or {}, "pod/" + dig(pods[0], "metadata", "name", default="support-llm")
-    return {}, "missing"
-
-
-def grade_05(oc: Oc, ns: str) -> list[Result]:
-    evidence = cm_data(oc, "vllm-evidence", ns)
-    r1 = has_values(evidence, ["pending_event", "root_cause", "quota_checked", "volume_topology_checked"])
-
-    template, workload = workload_template(oc, ns)
-    selector = template.get("nodeSelector", {}) or {}
-    tolerations = template.get("tolerations", []) or []
-    r2 = selector.get("accelerator") == "nvidia-a10" and any(
-        item.get("key") == "nvidia.com/gpu" and item.get("value") == "present" and item.get("effect") == "NoSchedule"
-        for item in tolerations
-    )
-
-    containers = template.get("containers", []) or []
-    container = containers[0] if containers else {}
-    resources = container.get("resources", {}) or {}
-    gpu = (resources.get("limits", {}) or {}).get("nvidia.com/gpu")
-    r3 = str(gpu) == "1" and non_todo((resources.get("requests", {}) or {}).get("cpu")) \
-        and non_todo((resources.get("requests", {}) or {}).get("memory"))
-
-    image = container.get("image", "")
-    command_line = " ".join(str(item) for item in [
-        *container.get("command", []), *container.get("args", [])
-    ]).lower()
-    deployment = oc.get("deployment", "support-llm", ns)
-    ready_pods = [
-        pod for pod in oc.list("pod", ns, "app=support-llm")
-        if condition_true(pod)
-    ]
-    workload_ready = deployment_ready(deployment) or bool(ready_pods)
-    r4 = workload_ready and ("vllm" in image.lower() or "vllm" in command_line) \
-        and bool(PINNED_IMAGE.search(image)) and has_values(evidence, ["model_revision", "stream_http", "stream_transcript_sha256"]) \
-        and evidence.get("stream_http", "").startswith("2")
-    r5 = has_values(evidence, ["concurrency", "p95_latency_ms", "tokens_per_second", "gpu_memory_mib", "gpu_utilization_pct", "queue_depth", "error_rate"])
-
-    return [
-        result("05-1", "Pending event 기반 근본 원인", 6, r1, "vllm-evidence ConfigMap"),
-        result("05-2", "A10 selector·정확한 toleration", 6, r2, workload),
-        result("05-3", "GPU 1개·CPU·memory request", 6, r3, json.dumps(resources, ensure_ascii=False)),
-        result("05-4", "Ready vLLM·고정 image/model revision·streaming", 6, r4, image or "image missing"),
-        result("05-5", "부하·latency·throughput·GPU·queue 기준선", 6, r5, "vllm-evidence ConfigMap"),
-    ]
-
-
-def registry_resources(oc: Oc, ns: str) -> dict[str, Any]:
-    inputs = cm_data(oc, "exam-provided-registry-inputs", ns)
-    registry_namespace = inputs.get("registry_namespace", "")
-    service = inputs.get("registry_service", "")
-    port = inputs.get("registry_service_port", "http-api")
-    api_path = inputs.get("registry_rest_api", "")
-    if not all(non_todo(value) for value in (registry_namespace, service, port, api_path)):
-        return {}
-
-    proxy = (
-        f"/api/v1/namespaces/{registry_namespace}/services/"
-        f"{service}:{port}/proxy{api_path}"
-    )
-    model_list = oc.raw_json(f"{proxy}/registered_models") or {}
-    model = next(
-        (item for item in model_list.get("items", []) if item.get("name") == "fraud-risk"),
-        None,
-    )
-    if not model or not non_todo(model.get("id")):
-        return {"inputs": inputs, "api_path": api_path, "proxy": proxy}
-
-    versions_list = oc.raw_json(
-        f"{proxy}/registered_models/{model['id']}/versions"
-    ) or {}
-    versions = {
-        item.get("name"): item
-        for item in versions_list.get("items", [])
-        if item.get("name") in {"1.0.0", "1.1.0"}
-    }
-    artifacts: dict[str, list[dict[str, Any]]] = {}
-    for version_name, version in versions.items():
-        version_id = version.get("id")
-        response = oc.raw_json(f"{proxy}/model_versions/{version_id}/artifacts") or {}
-        artifacts[version_name] = response.get("items", []) or []
-    return {
-        "inputs": inputs,
-        "api_path": api_path,
-        "proxy": proxy,
-        "model": model,
-        "versions": versions,
-        "artifacts": artifacts,
-    }
-
-
-def registry_metadata_matches(
-    evidence: dict[str, str],
-    model: dict[str, Any],
-    version: dict[str, Any],
-    artifacts: list[dict[str, Any]],
-) -> bool:
-    combined = json.dumps([model, version, *artifacts], ensure_ascii=False, sort_keys=True)
-    for key in (
-        "git_revision", "data_reference", "pipeline_run", "metrics",
-        "intended_use", "limitations", "owner", "approval",
-    ):
-        value = evidence.get(key)
-        if not non_todo(value) or key not in combined or str(value) not in combined:
-            return False
-    expected_format = str(evidence.get("format", "")).lower()
-    return non_todo(expected_format) and any(
-        str(item.get("modelFormatName", "")).lower() == expected_format
-        for item in artifacts
-    )
-
-
-def artifact_has_digest(
-    artifacts: list[dict[str, Any]],
-    digest: str,
-    repository: str,
-) -> bool:
-    normalized = str(digest or "").removeprefix("sha256:")
-    expected_uri = f"oci://{repository}@sha256:{normalized}"
-    return non_todo(repository) and is_sha(digest) and any(
-        str(item.get("uri", "")).strip().lower() == expected_uri.lower()
-        for item in artifacts
-    )
-
-
-def registry_credentials(oc: Oc, namespace: str) -> tuple[str, str] | None:
-    """Read the provided credential Secret without returning or printing it on failure."""
-    secret = oc.get("secret", "exam-provided-oci-credentials", namespace) or {}
-    data = secret.get("data", {}) or {}
-    try:
-        username = base64.b64decode(data["username"], validate=True).decode("utf-8")
-        password = base64.b64decode(data["password"], validate=True).decode("utf-8")
-    except (KeyError, ValueError, UnicodeDecodeError):
-        return None
-    if not non_todo(username) or not non_todo(password):
-        return None
-    return username, password
-
-
-def registry_has_manifest(
-    oc: Oc,
+def serving_runtime_is_openvino_onnx(
+    oc: Any,
     namespace: str,
-    inputs: dict[str, str],
-    digest: str,
+    runtime_name: str,
 ) -> bool:
-    credentials = registry_credentials(oc, namespace)
-    if not credentials or not is_sha(digest):
+    if not runtime_name:
         return False
-    checker = getattr(oc, "registry_manifest_exists", None)
-    if not callable(checker):
-        return False
-    username, password = credentials
-    return bool(checker(
-        inputs.get("oci_registry", ""),
-        inputs.get("oci_repository", ""),
-        digest,
-        username,
-        password,
-    ))
-
-
-def grade_06(oc: Oc, ns: str) -> list[Result]:
-    evidence = cm_data(oc, "registry-evidence", ns)
-    live = registry_resources(oc, ns)
-    model = live.get("model") or {}
-    versions = live.get("versions") or {}
-    version_1_0 = versions.get("1.0.0") or {}
-    version_1_1 = versions.get("1.1.0") or {}
-    artifacts = live.get("artifacts") or {}
-    r1 = has_values(evidence, ["model_id", "version_1_0_id", "version_1_1_id"]) \
-        and str(evidence.get("model_id")) == str(model.get("id")) \
-        and str(evidence.get("version_1_0_id")) == str(version_1_0.get("id")) \
-        and str(evidence.get("version_1_1_id")) == str(version_1_1.get("id")) \
-        and str(version_1_0.get("id")) != str(version_1_1.get("id"))
-
-    inputs = live.get("inputs") or {}
-    repository = "/".join(filter(None, [
-        str(inputs.get("oci_registry", "")).rstrip("/"),
-        str(inputs.get("oci_repository", "")).lstrip("/"),
-    ]))
-    r2 = artifact_has_digest(
-        artifacts.get("1.0.0", []), evidence.get("oci_digest_1_0", ""), repository
-    ) and artifact_has_digest(
-        artifacts.get("1.1.0", []), evidence.get("oci_digest_1_1", ""), repository
-    ) \
-        and evidence.get("oci_digest_1_0") != evidence.get("oci_digest_1_1") \
-        and registry_has_manifest(oc, ns, inputs, evidence.get("oci_digest_1_0", "")) \
-        and registry_has_manifest(oc, ns, inputs, evidence.get("oci_digest_1_1", "")) \
-        and is_sha(evidence.get("pulled_artifact_sha256"))
-    r3 = registry_metadata_matches(
-        evidence, model, version_1_1, artifacts.get("1.1.0", [])
+    runtime = oc.get(
+        "servingruntime.serving.kserve.io",
+        runtime_name,
+        namespace,
     )
-    r4 = evidence.get("registry_api_path") == "/api/model_registry/v1alpha3" \
-        and live.get("api_path") == evidence.get("registry_api_path") \
-        and is_sha(evidence.get("registry_api_response_sha256")) \
-        and bool(model)
-
-    deployments = oc.list("inferenceservice", ns)
-    approved_digest = str(evidence.get("oci_digest_1_1", "")).removeprefix("sha256:")
-    matching_deployments = [
-        item for item in deployments
-        if condition_true(item)
-        and approved_digest
-        and approved_digest in json.dumps(item, sort_keys=True).lower()
-        and str(dig(item, "metadata", "labels", "modelregistry.opendatahub.io/registered-model-id", default="")) == str(model.get("id", ""))
-        and str(dig(item, "metadata", "labels", "modelregistry.opendatahub.io/model-version-id", default="")) == str(version_1_1.get("id", ""))
-        and str(dig(item, "metadata", "labels", "modelregistry.opendatahub.io/name", default="")) == str(inputs.get("registry_name", ""))
-    ]
-    r5 = evidence.get("deployed_version") == "1.1.0" \
-        and is_sha(evidence.get("deployment_artifact_digest")) \
-        and str(evidence.get("deployment_artifact_digest", "")).removeprefix("sha256:") == approved_digest \
-        and bool(matching_deployments)
-
-    return [
-        result("06-1", "fraud-risk identity·두 version", 6, r1, "model_id + 서로 다른 version ID"),
-        result("06-2", "서로 다른 실제 OCI manifest digest·pull checksum", 6, r2, "Registry manifest 존재 여부 검증"),
-        result("06-3", "계보 metadata 완성", 6, r3, "source/data/run/metrics/use/approval"),
-        result("06-4", "REST v1alpha3 API 응답 증적", 6, r4, "registry_api_response_sha256"),
-        result("06-5", "1.1.0 exact artifact Ready 배포 연결", 6, r5, f"matching Ready deployments={len(matching_deployments)}"),
-    ]
-
-
-def grade_07(oc: Oc, ns: str) -> list[Result]:
-    service = oc.get("trustyaiservice", "trustyai-service", ns)
-    r1 = service is not None and (condition_true(service) or non_todo(dig(service, "status", "phase")))
-    capture = cm_data(oc, "monitoring-evidence", ns)
-    r1 = r1 and has_values(capture, ["model_identifier", "capture_test_sha256"])
-    r2 = has_values(capture, ["protected_attribute", "favorable_outcome", "comparison_groups", "fairness_threshold", "window", "minimum_samples"])
-    r3 = has_values(capture, ["reference_dataset_digest", "current_window", "drift_metric", "drift_result"]) and is_sha(capture.get("reference_dataset_digest"))
-    r4 = has_values(capture, ["request_latency_panel", "request_error_panel", "cpu_memory_panel", "accelerator_panel", "correlation_window"])
-    r5 = has_values(capture, ["signal_owner", "rollback_condition", "redaction_policy", "retention_policy", "access_policy"])
-
-    return [
-        result("07-1", "TrustyAIService·capture path", 6, r1, "trustyai-service + monitoring-evidence"),
-        result("07-2", "공정성 population·threshold·window", 6, r2, "monitoring-evidence ConfigMap"),
-        result("07-3", "고정 reference drift 비교", 6, r3, "reference_dataset_digest"),
-        result("07-4", "서비스·자원 동일 시간축 상관", 6, r4, "dashboard references"),
-        result("07-5", "owner·rollback·데이터 보호", 6, r5, "redaction/retention/access"),
-    ]
-
-
-def grade_08(oc: Oc, ns: str) -> list[Result]:
-    evidence = cm_data(oc, "optimization-evidence", ns)
-    r1 = has_values(evidence, ["baseline_model_revision", "runtime_digest", "hardware", "precision", "context_length", "dataset_revision", "seed"]) \
-        and is_sha(evidence.get("runtime_digest"))
-
-    job = oc.get("job", "quantize-support-llm", ns)
-    r2 = completed_job(job) and is_sha(evidence.get("optimized_artifact_digest")) \
-        and evidence.get("llm_compressor_support_status") == "Developer Preview"
-
-    jobs = oc.list("lmevaljob", ns)
-    succeeded_jobs = [
-        item for item in jobs
-        if dig(item, "status", "state") == "Complete"
-        and dig(item, "status", "reason") == "Succeeded"
-        and non_todo(dig(item, "status", "results"))
-    ]
-    named_jobs = {
-        dig(item, "metadata", "name") for item in succeeded_jobs
-    }
-    r3 = len(succeeded_jobs) >= 2 \
-        and evidence.get("baseline_lmeval_job") in named_jobs \
-        and evidence.get("optimized_lmeval_job") in named_jobs \
-        and evidence.get("baseline_lmeval_job") != evidence.get("optimized_lmeval_job") \
-        and has_values(evidence, ["standard_task", "korean_benchmark", "safety_benchmark", "sample_count", "failed_samples"])
-    r4 = has_values(evidence, ["quality_delta", "safety_delta", "p95_latency_delta", "throughput_delta", "memory_delta", "decision", "rollback_uri"]) \
-        and non_todo(evidence.get("rollback_uri"))
-
-    return [
-        result("08-1", "고정 baseline 계약", 6, r1, "optimization-evidence ConfigMap"),
-        result("08-2", "한 가지 최적화·digest·지원 상태", 6, r2, "job/quantize-support-llm"),
-        result("08-3", "동일 조건 LMEval 두 실행 성공", 6, r3, f"succeeded={len(succeeded_jobs)}/{len(jobs)}"),
-        result("08-4", "품질·성능 비교와 rollback", 6, r4, "comparison + rollback_uri"),
-    ]
-
-
-def deployment_ready(deployment: dict[str, Any] | None) -> bool:
-    desired = int(dig(deployment, "spec", "replicas", default=1) or 1)
-    available = int(dig(deployment, "status", "availableReplicas", default=0) or 0)
-    return available >= desired
-
-
-def grade_09(oc: Oc, ns: str) -> list[Result]:
-    evidence = cm_data(oc, "rag-evidence", ns)
-    r2 = has_values(evidence, ["source_id", "source_revision", "document_acl", "embedding_model_revision", "index_digest"]) and is_sha(evidence.get("index_digest"))
-
-    role = oc.get("role", "rag-reader", ns)
-    role_rules = (role or {}).get("rules", []) or []
-    role_ok = len(role_rules) == 1 and all(
-        set(rule.get("apiGroups", []) or []) == {""}
-        and set(rule.get("resources", []) or []) == {"configmaps"}
-        and set(rule.get("resourceNames", []) or []) == {"rag-documents"}
-        and set(rule.get("verbs", []) or []) == {"get"}
-        for rule in role_rules
+    formats = dig(runtime, "spec", "supportedModelFormats", default=[]) or []
+    onnx_v1 = any(
+        str(item.get("name", "")).lower() == "onnx"
+        and str(item.get("version", "")) == "1"
+        for item in formats
+        if isinstance(item, dict)
     )
-    network_policies = oc.list("networkpolicy", ns)
-    rolebindings = oc.list("rolebinding", ns)
-    def exact_rag_binding(binding: dict[str, Any]) -> bool:
-        subjects = binding.get("subjects", []) or []
-        return dig(binding, "roleRef", "kind") == "Role" \
-            and dig(binding, "roleRef", "name") == "rag-reader" \
-            and len(subjects) == 1 \
-            and subjects[0].get("kind") == "ServiceAccount" \
-            and subjects[0].get("name") == "rag-app" \
-            and subjects[0].get("namespace", ns) == ns \
-            and subjects[0].get("apiGroup", "") == ""
-
-    binding_ok = any(exact_rag_binding(binding) for binding in rolebindings)
-
-    def restricted_egress(policy: dict[str, Any]) -> bool:
-        spec = policy.get("spec", {}) or {}
-        if dig(spec, "podSelector", "matchLabels", "app") != "genai-app":
-            return False
-        if "Egress" not in (spec.get("policyTypes", []) or []):
-            return False
-        egress = spec.get("egress", []) or []
-        if not egress:
-            return False
-        destinations: set[str] = set()
-        dns_ok = False
-        for rule in egress:
-            peers = rule.get("to", []) or []
-            ports = rule.get("ports", []) or []
-            if not peers or not ports:
-                return False
-            for peer in peers:
-                if not peer or dig(peer, "ipBlock", "cidr") in {"0.0.0.0/0", "::/0"}:
-                    return False
-                app = dig(peer, "podSelector", "matchLabels", "app")
-                if app:
-                    if app not in {"mock-llm", "todo-tool"} \
-                            or any(str(port.get("port")) != "8080" or port.get("protocol", "TCP") != "TCP" for port in ports):
-                        return False
-                    destinations.add(app)
-                    continue
-                namespace_name = dig(
-                    peer, "namespaceSelector", "matchLabels", "kubernetes.io/metadata.name"
-                )
-                dns_ports = {
-                    (str(port.get("port")), port.get("protocol", "TCP"))
-                    for port in ports
-                }
-                if namespace_name != "openshift-dns" or dns_ports != {
-                    ("53", "UDP"), ("53", "TCP"),
-                    ("5353", "UDP"), ("5353", "TCP"),
-                }:
-                    return False
-                dns_ok = True
-        return destinations == {"mock-llm", "todo-tool"} and dns_ok
-
-    network_ok = any(restricted_egress(policy) for policy in network_policies)
-    r3 = role_ok and binding_ok and network_ok
-
-    verifier_cm = oc.get("configmap", "exam-provided-rag-verifier", ns)
-    verifier_source = dig(verifier_cm, "data", "verify_rag.py", default="")
-    verifier_hash_ok = hashlib.sha256(verifier_source.encode()).hexdigest() == RAG_VERIFIER_SHA256
-    verifier_job = oc.get("job", "rag-contract-verification", ns)
-    job_container = dig(verifier_job, "spec", "template", "spec", "containers", 0, default={}) or {}
-    job_volumes = dig(verifier_job, "spec", "template", "spec", "volumes", default=[]) or []
-    verifier_job_ok = completed_job(verifier_job) \
-        and verifier_hash_ok \
-        and job_container.get("image") == RAG_VERIFIER_IMAGE \
-        and job_container.get("command") == ["python", "/verify/verify_rag.py"] \
-        and any(
-            volume.get("configMap", {}).get("name") == "exam-provided-rag-verifier"
-            for volume in job_volumes
-        ) \
-        and any(
-            mount.get("mountPath") == "/verify" and mount.get("readOnly") is True
-            for mount in (job_container.get("volumeMounts", []) or [])
+    identity = " ".join(
+        (
+            resource_name(runtime),
+            json.dumps(annotations(runtime), ensure_ascii=False),
+            json.dumps(
+                dig(runtime, "spec", "annotations", default={}) or {},
+                ensure_ascii=False,
+            ),
+            json.dumps(
+                dig(runtime, "spec", "containers", default=[]) or [],
+                ensure_ascii=False,
+            ),
         )
-    r4 = evidence.get("unauthorized_retrieval_count") == "0" \
-        and evidence.get("stream_http", "").startswith("2") \
-        and has_values(evidence, ["citation_response_sha256"]) \
-        and verifier_job_ok
-    r5 = has_values(evidence, ["tool_schema_sha256", "tool_timeout_seconds", "tool_step_limit", "tool_audit_sha256"]) \
-        and evidence.get("tool_read_only", "").lower() == "true" \
-        and verifier_job_ok
-    r6 = has_values(evidence, ["direct_injection", "indirect_injection", "unauthorized_document", "malformed_tool_argument", "dependency_outage", "false_positive_test"]) \
-        and all(evidence.get(key, "").lower() == "pass" for key in ["direct_injection", "indirect_injection", "unauthorized_document", "malformed_tool_argument", "dependency_outage", "false_positive_test"]) \
-        and verifier_job_ok
+    ).lower()
+    openvino = "openvino" in identity or bool(
+        re.search(r"(?:^|[^a-z0-9])ovms(?:[^a-z0-9]|$)", identity)
+    )
+    return onnx_v1 and openvino
 
+
+def pod_resource_ready(resource: dict[str, Any] | None) -> bool:
+    statuses = dig(resource, "status", "containerStatuses", default=[]) or []
+    return phase(resource) == "Running" and bool(statuses) and all(bool(item.get("ready")) for item in statuses)
+
+
+def pipeline_server_pods_ready(oc: Any, namespace: str) -> bool:
+    groups = {
+        "api": ("ds-pipeline-dspa-", "api-server"),
+        "persistence": ("ds-pipeline-persistenceagent-", "persistenceagent"),
+        "scheduler": ("ds-pipeline-scheduledworkflow-", "scheduledworkflow"),
+    }
+    matched: dict[str, list[dict[str, Any]]] = {name: [] for name in groups}
+    for pod in oc.list("pod", namespace):
+        name = resource_name(pod).lower()
+        for group, tokens in groups.items():
+            if any(token in name for token in tokens):
+                matched[group].append(pod)
+    return all(items and any(pod_resource_ready(item) for item in items) for items in matched.values())
+
+
+def unauthenticated_v2_inference_ok(host: str, model_name: str) -> bool:
+    if not host or not re.fullmatch(r"[A-Za-z0-9.-]+(?::[0-9]+)?", host):
+        return False
+    context = ssl.create_default_context()
+    context.check_hostname = False
+    context.verify_mode = ssl.CERT_NONE
+    try:
+        metadata_request = urllib.request.Request(
+            f"https://{host}/v2/models/{model_name}",
+            method="GET",
+        )
+        with urllib.request.urlopen(metadata_request, context=context, timeout=20) as response:
+            metadata = json.loads(response.read())
+        inputs = metadata.get("inputs", []) or []
+        if not any(
+            item.get("name") == "float_input"
+            and str(item.get("datatype", "")).upper() == "FP32"
+            and item.get("shape") == [-1, 5]
+            for item in inputs
+            if isinstance(item, dict)
+        ):
+            return False
+    except (json.JSONDecodeError, OSError, urllib.error.URLError, ValueError):
+        return False
+
+    payload = json.dumps(
+        {
+            "inputs": [
+                {
+                    "name": "float_input",
+                    "shape": [1, 5],
+                    "datatype": "FP32",
+                    "data": [[0.2, -0.1, 0.5, 1.0, -0.4]],
+                }
+            ]
+        }
+    ).encode("utf-8")
+    request = urllib.request.Request(
+        f"https://{host}/v2/models/{model_name}/infer",
+        data=payload,
+        method="POST",
+        headers={"Content-Type": "application/json"},
+    )
+    try:
+        with urllib.request.urlopen(request, context=context, timeout=20) as response:
+            body = response.read()
+            return response.status == 200 and bool(body)
+    except (OSError, urllib.error.URLError, ValueError):
+        return False
+
+
+def git_check(oc: Any, namespace: str, notebook: str, expression: str) -> bool:
+    return exec_ok(
+        oc,
+        namespace,
+        notebook,
+        ["bash", "-lc", f"test -d /opt/app-root/src/AI26X-apps/.git && {expression}"],
+    )
+
+
+def notebook_is_stopped(oc: Any, namespace: str, notebook_name: str) -> bool:
+    notebook = oc.get("notebook.kubeflow.org", notebook_name, namespace)
+    return (
+        notebook is not None
+        and "kubeflow-resource-stopped" in annotations(notebook)
+        and notebook_pod(oc, namespace, notebook_name) is None
+    )
+
+
+def stopped_notebook_repo_checks(
+    oc: Any,
+    namespace: str,
+    notebook: dict[str, Any] | None,
+) -> tuple[bool, bool, bool]:
+    """Inspect a stopped workbench PVC read-only and remove all verifier resources."""
+
+    if not notebook or not hasattr(oc, "run_input"):
+        return False, False, False
+    pod_spec = dig(notebook, "spec", "template", "spec", default={}) or {}
+    container = first_container(notebook)
+    image = str(container.get("image", ""))
+    volume_by_name = {
+        str(volume.get("name", "")): volume
+        for volume in (pod_spec.get("volumes", []) or [])
+        if isinstance(volume, dict)
+    }
+    workspace_volume = next(
+        (
+            volume_by_name.get(str(mount.get("name", "")))
+            for mount in (container.get("volumeMounts", []) or [])
+            if mount.get("mountPath") == "/opt/app-root/src"
+        ),
+        None,
+    )
+    if not workspace_volume:
+        workspace_volume = next(
+            (
+                volume
+                for volume in volume_by_name.values()
+                if dig(volume, "persistentVolumeClaim", "claimName")
+            ),
+            None,
+        )
+    claim = str(dig(workspace_volume, "persistentVolumeClaim", "claimName", default=""))
+    if not image or not claim:
+        return False, False, False
+
+    verify_code = r'''
+import json
+import pathlib
+import subprocess
+
+repo = pathlib.Path("/workspace/AI26X-apps")
+safe = f"safe.directory={repo}"
+def git(*args):
+    result = subprocess.run(
+        ["git", "-c", safe, "-C", str(repo), *args],
+        capture_output=True,
+        text=True,
+    )
+    return result.stdout.strip() if result.returncode == 0 else ""
+
+remote = git("remote", "get-url", "origin")
+print(json.dumps({
+    "repository": remote in {
+        "https://github.com/RedHatTraining/AI26X-apps",
+        "https://github.com/RedHatTraining/AI26X-apps.git",
+    },
+    "branch": git("branch", "--show-current") == "RHOAI3.3",
+    "file": (repo / "workbench/working/train_model.ipynb").is_file(),
+}, sort_keys=True))
+'''
+    job_name = f"ai267-grade-05-{secrets.token_hex(4)}"
+    manifest = {
+        "apiVersion": "batch/v1",
+        "kind": "Job",
+        "metadata": {
+            "name": job_name,
+            "namespace": namespace,
+            "labels": {"ai267.practice/created-by": "task-05-grader"},
+        },
+        "spec": {
+            "backoffLimit": 0,
+            "activeDeadlineSeconds": 180,
+            "ttlSecondsAfterFinished": 300,
+            "template": {
+                "metadata": {
+                    "labels": {"ai267.practice/created-by": "task-05-grader"},
+                },
+                "spec": {
+                    "restartPolicy": "Never",
+                    "automountServiceAccountToken": False,
+                    "containers": [
+                        {
+                            "name": "verify",
+                            "image": image,
+                            "command": ["python3", "-c", verify_code],
+                            "env": [{"name": "HOME", "value": "/tmp"}],
+                            "volumeMounts": [
+                                {
+                                    "name": "workspace",
+                                    "mountPath": "/workspace",
+                                    "readOnly": True,
+                                }
+                            ],
+                        }
+                    ],
+                    "volumes": [
+                        {
+                            "name": "workspace",
+                            "persistentVolumeClaim": {
+                                "claimName": claim,
+                                "readOnly": True,
+                            },
+                        }
+                    ],
+                },
+            },
+        },
+    }
+    image_pull_secrets = [
+        {"name": str(item.get("name"))}
+        for item in (pod_spec.get("imagePullSecrets", []) or [])
+        if isinstance(item, dict) and item.get("name")
+    ]
+    if image_pull_secrets:
+        manifest["spec"]["template"]["spec"]["imagePullSecrets"] = image_pull_secrets
+    checks = (False, False, False)
+    cleanup_ok = True
+    create_attempted = False
+    try:
+        create_attempted = True
+        created = oc.run_input(
+            json.dumps(manifest),
+            "create",
+            "-f",
+            "-",
+            "-o",
+            "json",
+            timeout=30,
+        )
+        if created.returncode:
+            return checks
+        waited = oc.run(
+            "wait",
+            "--for=condition=complete",
+            f"job/{job_name}",
+            "-n",
+            namespace,
+            "--timeout=150s",
+            timeout=165,
+        )
+        if waited.returncode:
+            return checks
+        logs = oc.run("logs", f"job/{job_name}", "-n", namespace, timeout=30)
+        if logs.returncode:
+            return checks
+        lines = [line for line in logs.stdout.splitlines() if line.strip()]
+        evidence = json.loads(lines[-1]) if lines else {}
+        checks = (
+            evidence.get("repository") is True,
+            evidence.get("branch") is True,
+            evidence.get("file") is True,
+        )
+    except (AttributeError, json.JSONDecodeError, TypeError, ValueError):
+        checks = (False, False, False)
+    finally:
+        if create_attempted:
+            existing = oc.run(
+                "get",
+                "job",
+                job_name,
+                "-n",
+                namespace,
+                "-o",
+                "json",
+                timeout=20,
+            )
+            if existing.returncode:
+                cleanup_ok = "notfound" in existing.stderr.lower().replace(" ", "")
+            else:
+                try:
+                    owned = (
+                        dig(
+                            json.loads(existing.stdout),
+                            "metadata",
+                            "labels",
+                            "ai267.practice/created-by",
+                        )
+                        == "task-05-grader"
+                    )
+                except (json.JSONDecodeError, TypeError):
+                    owned = False
+                if not owned:
+                    cleanup_ok = False
+                else:
+                    deleted = oc.run(
+                        "delete",
+                        "job",
+                        job_name,
+                        "-n",
+                        namespace,
+                        "--wait=true",
+                        "--timeout=60s",
+                        timeout=75,
+                    )
+                    cleanup_ok = deleted.returncode == 0 or (
+                        "notfound" in deleted.stderr.lower().replace(" ", "")
+                    )
+    return tuple(value and cleanup_ok for value in checks)
+
+
+def s3_object(
+    oc: Any,
+    namespace: str,
+    notebook: str,
+    key: str,
+    expected_text: str | None = None,
+) -> bool:
+    code = r'''
+import os, sys
+import boto3
+endpoint = os.environ.get("AWS_S3_ENDPOINT") or os.environ.get("AWS_ENDPOINT_URL")
+bucket = os.environ.get("AWS_S3_BUCKET") or os.environ.get("AWS_BUCKET")
+client = boto3.client(
+    "s3",
+    endpoint_url=endpoint,
+    region_name=os.environ.get("AWS_DEFAULT_REGION", "us-east-1"),
+    aws_access_key_id=os.environ.get("AWS_ACCESS_KEY_ID"),
+    aws_secret_access_key=os.environ.get("AWS_SECRET_ACCESS_KEY"),
+    verify=False,
+)
+body = client.get_object(Bucket=bucket, Key=sys.argv[1])["Body"].read()
+if not body:
+    raise SystemExit(2)
+if len(sys.argv) > 2 and body.decode("utf-8").strip() != sys.argv[2]:
+    raise SystemExit(3)
+print(len(body))
+'''
+    command = ["python3", "-c", code, key]
+    if expected_text is not None:
+        command.append(expected_text)
+    return exec_ok(oc, namespace, notebook, command, timeout=60)
+
+
+def s3_connection_matches(
+    secret: dict[str, Any] | None,
+    *,
+    access_key: str,
+    secret_key: str,
+    endpoint: str,
+    region: str,
+    bucket: str,
+) -> bool:
+    data = secret_data(secret)
+    return (
+        annotations(secret).get("opendatahub.io/connection-type-protocol") == "s3"
+        and data.get("AWS_ACCESS_KEY_ID") == access_key
+        and data.get("AWS_SECRET_ACCESS_KEY") == secret_key
+        and data.get("AWS_DEFAULT_REGION") == region
+        and data.get("AWS_S3_BUCKET") == bucket
+        and str(data.get("AWS_S3_ENDPOINT", "")).rstrip("/") == endpoint.rstrip("/")
+    )
+
+
+def s3_object_matches_local(
+    oc: Any,
+    namespace: str,
+    notebook: str,
+    local_path: str,
+    key: str,
+    downloaded_path: str | None = None,
+) -> bool:
+    code = r'''
+import hashlib, os, pathlib, sys
+import boto3
+path = pathlib.Path(sys.argv[1])
+if not path.is_file() or path.stat().st_size == 0:
+    raise SystemExit(2)
+endpoint = os.environ.get("AWS_S3_ENDPOINT") or os.environ.get("AWS_ENDPOINT_URL")
+bucket = os.environ.get("AWS_S3_BUCKET") or os.environ.get("AWS_BUCKET")
+client = boto3.client(
+    "s3",
+    endpoint_url=endpoint,
+    region_name=os.environ.get("AWS_DEFAULT_REGION", "us-east-1"),
+    aws_access_key_id=os.environ.get("AWS_ACCESS_KEY_ID"),
+    aws_secret_access_key=os.environ.get("AWS_SECRET_ACCESS_KEY"),
+    verify=False,
+)
+remote = client.get_object(Bucket=bucket, Key=sys.argv[2])["Body"].read()
+if not remote or hashlib.sha256(remote).digest() != hashlib.sha256(path.read_bytes()).digest():
+    raise SystemExit(3)
+if len(sys.argv) > 3:
+    downloaded = pathlib.Path(sys.argv[3])
+    if not downloaded.is_file() or downloaded.stat().st_size == 0:
+        raise SystemExit(4)
+    if hashlib.sha256(downloaded.read_bytes()).digest() != hashlib.sha256(path.read_bytes()).digest():
+        raise SystemExit(5)
+'''
+    command = ["python3", "-c", code, local_path, key]
+    if downloaded_path is not None:
+        command.append(downloaded_path)
+    return exec_ok(
+        oc,
+        namespace,
+        notebook,
+        command,
+        timeout=60,
+    )
+
+
+def s3_prefix_has(oc: Any, namespace: str, notebook: str, names: list[str]) -> bool:
+    code = r'''
+import os, sys
+import boto3
+endpoint = os.environ.get("AWS_S3_ENDPOINT") or os.environ.get("AWS_ENDPOINT_URL")
+bucket = os.environ.get("AWS_S3_BUCKET") or os.environ.get("AWS_BUCKET")
+client = boto3.client(
+    "s3",
+    endpoint_url=endpoint,
+    region_name=os.environ.get("AWS_DEFAULT_REGION", "us-east-1"),
+    aws_access_key_id=os.environ.get("AWS_ACCESS_KEY_ID"),
+    aws_secret_access_key=os.environ.get("AWS_SECRET_ACCESS_KEY"),
+    verify=False,
+)
+keys = []
+for page in client.get_paginator("list_objects_v2").paginate(Bucket=bucket, Prefix="issues_prediction-"):
+    keys.extend(item["Key"] for item in page.get("Contents", []))
+expected = set(sys.argv[1:])
+folders = {}
+for key in keys:
+    if "/" not in key:
+        continue
+    folder, name = key.split("/", 1)
+    if not folder.startswith("issues_prediction-") or "/" in name:
+        continue
+    folders.setdefault(folder, set()).add(name)
+if not any(expected <= found for found in folders.values()):
+    raise SystemExit(2)
+print("\n".join(keys))
+'''
+    return exec_ok(oc, namespace, notebook, ["python3", "-c", code, *names], timeout=60)
+
+
+def local_joblib_model_ok(oc: Any, namespace: str, notebook: str, path: str) -> bool:
+    code = r'''
+import pathlib, sys
+import joblib
+path = pathlib.Path(sys.argv[1])
+if not path.is_file() or path.stat().st_size == 0:
+    raise SystemExit(2)
+model = joblib.load(path)
+if int(getattr(model, "n_features_in_", -1)) != 8:
+    raise SystemExit(3)
+if not callable(getattr(model, "predict", None)):
+    raise SystemExit(4)
+'''
+    return exec_ok(oc, namespace, notebook, ["python3", "-c", code, path])
+
+
+def _walk_dicts(value: Any):
+    if isinstance(value, dict):
+        yield value
+        for nested in value.values():
+            yield from _walk_dicts(nested)
+    elif isinstance(value, list):
+        for nested in value:
+            yield from _walk_dicts(nested)
+
+
+def elyra_pipeline_checks(content: str) -> tuple[bool, bool]:
+    try:
+        document = json.loads(content)
+    except (json.JSONDecodeError, TypeError):
+        return False, False
+    pipelines = document.get("pipelines", []) or []
+    if not pipelines or not isinstance(pipelines[0], dict):
+        return False, False
+    pipeline = pipelines[0]
+    nodes = pipeline.get("nodes", []) or []
+    expected = [
+        ("data_ingestion.py", "data.csv"),
+        ("data_preprocessing.py", "clean-data.csv"),
+        ("data_training_and_forecasting.py", "forecast-data.csv"),
+    ]
+    if len(nodes) != len(expected) or not all(isinstance(node, dict) for node in nodes):
+        return False, False
+
+    node_by_script: dict[str, dict[str, Any]] = {}
+    for node in nodes:
+        filename = str(
+            dig(node, "app_data", "component_parameters", "filename", default="")
+        )
+        script = filename.replace("\\", "/").rsplit("/", 1)[-1]
+        if script not in {name for name, _ in expected} or script in node_by_script:
+            return False, False
+        node_by_script[script] = node
+    if set(node_by_script) != {script for script, _ in expected}:
+        return False, False
+
+    runtime = str(dig(pipeline, "app_data", "properties", "runtime", default=""))
+    outputs_ok = all(
+        dig(
+            node_by_script[script],
+            "app_data",
+            "component_parameters",
+            "outputs",
+            default=[],
+        )
+        == [output]
+        for script, output in expected
+    )
+    nodes_ok = runtime == "Pipelines"
+
+    node_ids = {
+        script: str(node_by_script[script].get("id", ""))
+        for script, _ in expected
+    }
+    if not all(node_ids.values()) or len(set(node_ids.values())) != len(node_ids):
+        return False, outputs_ok
+
+    edges: set[tuple[str, str]] = set()
+    ids = set(node_ids.values())
+    for script, node in node_by_script.items():
+        source = node_ids[script]
+        for entry in _walk_dicts(node.get("outputs", [])):
+            for key, value in entry.items():
+                if "node" in str(key).lower() and str(value) in ids and str(value) != source:
+                    edges.add((source, str(value)))
+        for entry in _walk_dicts(node.get("inputs", [])):
+            for key, value in entry.items():
+                if "node" in str(key).lower() and str(value) in ids and str(value) != source:
+                    edges.add((str(value), source))
+    for entry in _walk_dicts({key: value for key, value in pipeline.items() if key != "nodes"}):
+        source = next(
+            (str(value) for key, value in entry.items() if any(token in str(key).lower() for token in ("source", "from")) and str(value) in ids),
+            "",
+        )
+        target = next(
+            (str(value) for key, value in entry.items() if any(token in str(key).lower() for token in ("target", "to")) and str(value) in ids),
+            "",
+        )
+        if source and target and source != target:
+            edges.add((source, target))
+
+    ordered_ids = [node_ids[script] for script, _ in expected]
+    nodes_ok = nodes_ok and all(
+        (source, target) in edges
+        for source, target in zip(ordered_ids, ordered_ids[1:])
+    )
+    return nodes_ok, outputs_ok
+
+
+def elyra_pipeline_settings_ok(content: str) -> bool:
+    try:
+        document = json.loads(content)
+    except (json.JSONDecodeError, TypeError):
+        return False
+    pipeline = next(
+        (item for item in (document.get("pipelines", []) or []) if isinstance(item, dict)),
+        None,
+    )
+    if pipeline is None:
+        return False
+    properties = dig(pipeline, "app_data", "properties", default={}) or {}
+    defaults = properties.get("pipeline_defaults", {}) or {}
+    mappings = defaults.get("kubernetes_secrets", []) or []
+    expected = {
+        (key, "aws-connection-s3-minio", key)
+        for key in (
+            "AWS_ACCESS_KEY_ID",
+            "AWS_SECRET_ACCESS_KEY",
+            "AWS_S3_ENDPOINT",
+            "AWS_S3_BUCKET",
+        )
+    }
+    actual = {
+        (
+            str(item.get("env_var", "")),
+            str(item.get("name", "")),
+            str(item.get("key", "")),
+        )
+        for item in mappings
+        if isinstance(item, dict)
+    }
+    return (
+        properties.get("runtime") == "Pipelines"
+        and defaults.get("runtime_image") == ELYRA_RUNTIME_IMAGE
+        and len(mappings) == 4
+        and actual == expected
+    )
+
+
+def elyra_runtime_image_metadata_ok(oc: Any, namespace: str, notebook: str) -> bool:
+    code = r'''
+import json
+import pathlib
+import subprocess
+
+roots = [pathlib.Path.home() / ".local/share/jupyter/metadata/runtime-images"]
+result = subprocess.run(["jupyter", "--data-dir"], capture_output=True, text=True)
+if result.returncode == 0 and result.stdout.strip():
+    roots.append(pathlib.Path(result.stdout.strip()) / "metadata/runtime-images")
+for root in roots:
+    for path in root.glob("*.json"):
+        try:
+            document = json.loads(path.read_text())
+        except (OSError, json.JSONDecodeError):
+            continue
+        if (
+            document.get("display_name") == "__ELYRA_RUNTIME_DISPLAY_NAME__"
+            and (document.get("metadata") or {}).get("image_name")
+            == "__ELYRA_RUNTIME_IMAGE__"
+        ):
+            raise SystemExit(0)
+raise SystemExit(2)
+'''.replace("__ELYRA_RUNTIME_DISPLAY_NAME__", ELYRA_RUNTIME_DISPLAY_NAME).replace(
+        "__ELYRA_RUNTIME_IMAGE__", ELYRA_RUNTIME_IMAGE
+    )
+    return exec_ok(oc, namespace, notebook, ["python3", "-c", code])
+
+
+def profile_identifiers(profile: dict[str, Any] | None) -> dict[str, dict[str, Any]]:
+    return {
+        str(item.get("identifier")): item
+        for item in (dig(profile, "spec", "identifiers", default=[]) or [])
+    }
+
+
+def profile_matches(
+    profile: dict[str, Any] | None,
+    cpu: tuple[str, str, str],
+    memory: tuple[str, str, str],
+) -> bool:
+    identifiers = profile_identifiers(profile)
+    cpu_item = identifiers.get("cpu", {})
+    memory_item = identifiers.get("memory", {})
+    return (
+        tuple(str(cpu_item.get(key, "")) for key in ("minCount", "defaultCount", "maxCount")) == cpu
+        and tuple(str(memory_item.get(key, "")) for key in ("minCount", "defaultCount", "maxCount")) == memory
+    )
+
+
+def workflows(oc: Any, namespace: str) -> list[dict[str, Any]]:
+    return oc.list("workflow.argoproj.io", namespace)
+
+
+def grader_01(oc: Any, ns: str) -> list[Check]:
+    project = oc.get("namespace", "my-lab-pro")
+    notebook = oc.get("notebook.kubeflow.org", "myworkbench-wb", ns)
+    profile_namespace = "redhat-ods-applications"
+    profile = oc.get(
+        "hardwareprofile.infrastructure.opendatahub.io",
+        "task01-2cpu-8gi",
+        profile_namespace,
+    )
+    container = first_container(notebook)
+    resources = container.get("resources", {}) or {}
+    requests = resources.get("requests", {}) or {}
+    limits = resources.get("limits", {}) or {}
+    rajan_roles = roles_for_user(oc, ns, "rajan")
+    punit_roles = roles_for_user(oc, ns, "punit")
+    suraj_roles = roles_for_user(oc, ns, "suraj")
+    role_ok = (
+        "admin" in rajan_roles
+        and "admin" in punit_roles
+        and "edit" in suraj_roles
+        and not ({"admin", "cluster-admin"} & suraj_roles)
+        and not dangerous_cluster_binding(oc, users={"rajan", "punit", "suraj"})
+    )
+    resource_ok = (
+        ns == "my-lab-pro"
+        and resource_name(project) == "my-lab-pro"
+        and notebook_image_is(
+            notebook,
+            display_name="Jupyter | PyTorch | CUDA | Python 3.12",
+            image_tokens=("pytorch",),
+        )
+        and notebook_image_version_is(notebook, "2025.2")
+        and annotations(profile).get("opendatahub.io/display-name")
+        == "Task 01 - 2 CPU, 8 GiB"
+        and profile_matches(profile, ("2", "2", "2"), ("8Gi", "8Gi", "8Gi"))
+        and notebook_uses_hardware_profile(
+            notebook,
+            "task01-2cpu-8gi",
+            profile_namespace,
+        )
+        and str(requests.get("cpu")) in {"2", "2000m"}
+        and str(limits.get("cpu")) in {"2", "2000m"}
+        and str(requests.get("memory")) in {"8Gi", "8192Mi"}
+        and str(limits.get("memory")) in {"8Gi", "8192Mi"}
+    )
+    pvc = oc.get("pvc", "myworkbench-wb-storage", ns)
+    storage = str(dig(pvc, "spec", "resources", "requests", "storage", default=""))
+    pvc_ok = (
+        storage in {"2Gi", "2048Mi"}
+        and phase(pvc) == "Bound"
+        and notebook_has_pvc(notebook, "myworkbench-wb-storage")
+    )
+    configmap = oc.get("configmap", "myworkbench-env", ns)
+    env_ok = (
+        dig(configmap, "data", "var") == "devops-wala"
+        and notebook_has_source(notebook, "configMap", "myworkbench-env")
+    )
+    repo_ok = git_check(
+        oc,
+        ns,
+        "myworkbench-wb",
+        "url=$(git -C /opt/app-root/src/AI26X-apps remote get-url origin) && "
+        "{ test \"$url\" = https://github.com/RedHatTraining/AI26X-apps.git || "
+        "test \"$url\" = https://github.com/RedHatTraining/AI26X-apps; }",
+    )
     return [
-        result("09-1", "버전된 ingestion·ACL·index digest", 6, r2, "rag-evidence ConfigMap"),
-        result("09-2", "retrieval 전 권한 경계·최소 권한", 6, r3, f"Role={role_ok}, RoleBinding={binding_ok}, NetworkPolicy={network_ok}"),
-        result("09-3", "unauthorized=0·streaming·citation", 6, r4, f"fixed verifier Job={verifier_job_ok}"),
-        result("09-4", "read-only typed tool·timeout·audit", 6, r5, f"fixed verifier Job={verifier_job_ok}"),
-        result("09-5", "주입·권한·오류·장애 시험", 6, r6, f"6-case fixed verifier Job={verifier_job_ok}"),
+        check("01-rbac", "프로젝트 Admin/Contributor 권한", role_ok, "rajan·punit=admin, suraj=edit RoleBinding"),
+        check(
+            "01-workbench",
+            "my-lab-pro PyTorch 2025.2 Workbench와 2 CPU/8 GiB",
+            resource_ok,
+            "PyTorch 2.7/Python 3.12 image version 2025.2 and global task01-2cpu-8gi profile",
+        ),
+        check("01-storage", "2 GiB 영구 스토리지", pvc_ok, "myworkbench-wb-storage Bound 및 mount"),
+        check("01-env", "ConfigMap 환경 변수", env_ok, "myworkbench-env: var=devops-wala"),
+        check("01-git", "AI26X-apps 복제", repo_ok, "Workbench PVC의 Git 저장소"),
     ]
 
 
-def grade_10(oc: Oc, ns: str) -> list[Result]:
-    evidence = cm_data(oc, "evidence-manifest", ns)
-    r1 = has_values(evidence, ["git_sha", "environment_lock_sha256", "pipeline_definition_sha256", "secret_scan_result"]) \
-        and evidence.get("secret_scan_result", "").lower() == "pass"
-    r2 = has_values(evidence, ["export_format", "model_sha256", "clean_load_test", "sample_inference_sha256"]) \
-        and evidence.get("clean_load_test", "").lower() == "pass" \
-        and is_sha(evidence.get("model_sha256")) and is_sha(evidence.get("sample_inference_sha256"))
-    lineage_keys = ["image_digest", "data_digest", "pipeline_run_id", "model_digest", "index_digest", "metric", "approval", "deployment_digest", "monitoring_link"]
-    r3 = has_values(evidence, lineage_keys) \
-        and all(is_sha(evidence.get(key)) for key in ["image_digest", "data_digest", "model_digest", "index_digest", "deployment_digest"])
-
-    replay = oc.get("job", "clean-replay", ns)
-    rollback = cm_data(oc, "rollback-evidence", ns)
-    r4 = completed_job(replay) and has_values(rollback, ["previous_model_digest", "previous_runtime_digest", "endpoint_http", "protocol_test_sha256", "verified_at"]) \
-        and rollback.get("endpoint_http", "").startswith("2") \
-        and is_sha(rollback.get("previous_model_digest")) and is_sha(rollback.get("previous_runtime_digest"))
-
+def grader_02(oc: Any, ns: str) -> list[Check]:
+    dev_group = oc.get("group.user.openshift.io", "devops-wala")
+    admin_group = oc.get("group.user.openshift.io", "ai267-admins")
+    auth = oc.get("auth.services.platform.opendatahub.io", "auth")
+    allowed = set(dig(auth, "spec", "allowedGroups", default=[]) or [])
+    admins = set(dig(auth, "spec", "adminGroups", default=[]) or [])
+    dev_users = {"developer", "rajan", "punit"}
+    other_group_member = any(
+        resource_name(group) != "devops-wala" and bool(group_users(group) & dev_users)
+        for group in oc.list("group.user.openshift.io")
+    )
+    membership_ok = (
+        dev_group is not None
+        and group_users(dev_group) == dev_users
+        and not (group_users(admin_group) & dev_users)
+        and not other_group_member
+        and not dangerous_cluster_binding(
+            oc,
+            users=dev_users,
+            groups={"devops-wala", "system:authenticated", "system:authenticated:oauth"},
+        )
+    )
     return [
-        result("10-1", "clean Git·lock·secret scan", 6, r1, "evidence-manifest ConfigMap"),
-        result("10-2", "model export·clean load/inference", 6, r2, "model/sample digest"),
-        result("10-3", "source→data→run→model→배포 계보", 6, r3, "evidence-manifest ConfigMap"),
-        result("10-4", "clean replay Job·rollback 재검증", 6, r4, "job/clean-replay + rollback-evidence"),
+        check("02-users", "일반 사용자 그룹 구성", group_users(dev_group) == dev_users, "devops-wala exact membership"),
+        check("02-admins", "관리자 그룹 구성", group_users(admin_group) == {"suraj", "raja", "andrew"}, "ai267-admins exact membership"),
+        check("02-auth", "Auth allowed/admin groups", allowed == {"devops-wala"} and admins == {"ai267-admins"}, "Auth/auth spec"),
+        check("02-isolation", "일반 사용자 그룹 격리", membership_ok, "다른 Group/관리자 ClusterRoleBinding에서 제외"),
+        check(
+            "02-no-broad-admin",
+            "일반 그룹 관리자 권한 차단",
+            auth is not None
+            and dev_group is not None
+            and not dangerous_cluster_binding(
+                oc,
+                users=dev_users,
+                groups={"devops-wala", "system:authenticated", "system:authenticated:oauth"},
+            )
+            and "system:authenticated" not in allowed
+            and "system:authenticated:oauth" not in allowed,
+            "broad access/admin binding 없음",
+        ),
     ]
 
 
-GRADERS: dict[str, Callable[[Oc, str], list[Result]]] = {
-    "01": grade_01,
-    "02": grade_02,
-    "03": grade_03,
-    "04": grade_04,
-    "05": grade_05,
-    "06": grade_06,
-    "07": grade_07,
-    "08": grade_08,
-    "09": grade_09,
-    "10": grade_10,
+def grader_03(oc: Any, ns: str) -> list[Check]:
+    large = oc.get("hardwareprofile.infrastructure.opendatahub.io", "large", ns)
+    xlarge = oc.get("hardwareprofile.infrastructure.opendatahub.io", "xlarge", ns)
+    hidden = all(
+        item is None or annotations(item).get("opendatahub.io/disabled") == "true"
+        for item in (large, xlarge)
+    )
+    medium = oc.get("hardwareprofile.infrastructure.opendatahub.io", "medium-small", ns)
+    my_medium = oc.get("hardwareprofile.infrastructure.opendatahub.io", "my-medium", ns)
+    profiles_ok = (
+        hidden
+        and annotations(medium).get("opendatahub.io/display-name") == "MediumSmall"
+        and profile_matches(medium, ("1", "1", "2"), ("16Gi", "16Gi", "16Gi"))
+        and annotations(my_medium).get("opendatahub.io/display-name") == "My-medium"
+        and profile_matches(my_medium, ("1", "1", "2"), ("1Gi", "1Gi", "2Gi"))
+    )
+    notebook = oc.get("notebook.kubeflow.org", "manage-resources-wb", ns)
+    note = annotations(notebook)
+    selected_profile_name = str(note.get("opendatahub.io/hardware-profile-name", ""))
+    selected_profile_namespace = str(
+        note.get("opendatahub.io/hardware-profile-namespace", "") or ns
+    )
+    selected_profile = oc.get(
+        "hardwareprofile.infrastructure.opendatahub.io",
+        selected_profile_name,
+        selected_profile_namespace,
+    )
+    selected_profile_display = str(
+        annotations(selected_profile).get("opendatahub.io/display-name", "")
+    ).strip()
+    small_profile = selected_profile is not None and selected_profile_display.casefold() == "small"
+    notebook_ok = (
+        notebook_image_is(
+            notebook,
+            display_name="Jupyter | Data Science | CPU | Python 3.12",
+            image_tokens=("generic-data-science",),
+        )
+        and small_profile
+        and pod_is_ready(oc, ns, "manage-resources-wb")
+    )
+    repo_ok = git_check(
+        oc,
+        ns,
+        "manage-resources-wb",
+        "url=$(git -C /opt/app-root/src/AI26X-apps remote get-url origin) && "
+        "{ test \"$url\" = https://github.com/RedHatTraining/AI26X-apps.git || "
+        "test \"$url\" = https://github.com/RedHatTraining/AI26X-apps; } && "
+        "test \"$(git -C /opt/app-root/src/AI26X-apps branch --show-current)\" = RHOAI3.3",
+    )
+    notebook_file = exec_stdout(
+        oc,
+        ns,
+        "manage-resources-wb",
+        [
+            "git",
+            "-C",
+            "/opt/app-root/src/AI26X-apps",
+            "show",
+            "experiment:workbench/working/experiment1.ipynb",
+        ],
+    )
+    code = notebook_code(notebook_file)
+    plot_ok = (
+        bool(re.search(r"(?:import\s+numpy|from\s+numpy\s+import)", code))
+        and bool(re.search(r"(?:import\s+plotly\.express|from\s+plotly\s+import\s+express)", code))
+        and notebook_has_exact_scatter_plot(notebook_file)
+        and bool(
+            re.search(r"\bx\s*\*\*\s*2\b", code)
+            or re.search(r"np\.(?:square|power)\s*\(\s*x(?:\s*,\s*2)?\s*\)", code)
+        )
+        and notebook_cell_executed(notebook_file, "scatter")
+        and notebook_cell_executed(notebook_file, "fig.show")
+        and notebook_has_saved_output(notebook_file)
+    )
+    merge_ok = git_check(
+        oc,
+        ns,
+        "manage-resources-wb",
+        "git -C /opt/app-root/src/AI26X-apps show-ref --verify --quiet refs/heads/experiment && "
+        "git -C /opt/app-root/src/AI26X-apps show-ref --verify --quiet refs/remotes/origin/RHOAI3.3 && "
+        "git -C /opt/app-root/src/AI26X-apps cat-file -e experiment:workbench/working/experiment1.ipynb && "
+        "! git -C /opt/app-root/src/AI26X-apps diff --quiet origin/RHOAI3.3..experiment -- workbench/working/experiment1.ipynb && "
+        "git -C /opt/app-root/src/AI26X-apps merge-base --is-ancestor experiment RHOAI3.3 && "
+        "test \"$(git -C /opt/app-root/src/AI26X-apps rev-list --count origin/RHOAI3.3..experiment)\" -ge 1 && "
+        "test -z \"$(git -C /opt/app-root/src/AI26X-apps status --porcelain)\"",
+    )
+    return [
+        check("03-profiles", "Hardware Profile 구성", profiles_ok, "Large/X Large 숨김, MediumSmall/My-medium 값"),
+        check("03-workbench", "Small Data Science Workbench", notebook_ok, "manage-resources-wb uses an available Small profile"),
+        check("03-repository", "RHOAI3.3 저장소", repo_ok, "AI26X-apps local branch"),
+        check("03-notebook", "experiment1 산점도", plot_ok, "NumPy·Plotly notebook 내용"),
+        check("03-merge", "feature branch 병합", merge_ok, "experiment → RHOAI3.3, clean worktree"),
+    ]
+
+
+def grader_04(oc: Any, ns: str) -> list[Check]:
+    target_ns = "projects-data"
+    secret = oc.get("secret", "projects-data-connection", target_ns)
+    if secret is None:
+        secret = oc.get(
+            "secret",
+            "aws-connection-projects-data-connection",
+            target_ns,
+        )
+    secret_ok = s3_connection_matches(
+        secret,
+        access_key="minio",
+        secret_key="minio123",
+        endpoint="https://minio-api-minio.apps.lab.example.com",
+        region="us-east-1",
+        bucket="projects-data-bucket",
+    )
+    notebook = oc.get("notebook.kubeflow.org", "projects-data-wb", target_ns)
+    workbench_ok = (
+        notebook_image_is(
+            notebook,
+            display_name="Jupyter | Data Science | CPU | Python 3.12",
+            image_tokens=("generic-data-science",),
+        )
+        and notebook_has_connection(notebook, target_ns, "projects-data-connection")
+        and pod_is_ready(oc, target_ns, "projects-data-wb")
+    )
+    repo = "/opt/app-root/src/AI26X-apps"
+    repository_ok = git_check(
+        oc,
+        target_ns,
+        "projects-data-wb",
+        f"url=$(git -C {repo} remote get-url origin) && "
+        "{ test \"$url\" = https://github.com/RedHatTraining/AI26X-apps.git || "
+        "test \"$url\" = https://github.com/RedHatTraining/AI26X-apps; } && "
+        f"test \"$(git -C {repo} branch --show-current)\" = RHOAI3.3 && "
+        f"test -f {repo}/workbench/connections/workbench-connections.ipynb",
+    )
+    source = f"{repo}/workbench/connections/dataset.csv"
+    downloaded = f"{repo}/workbench/connections/downloaded-dataset.csv"
+    notebook_content = exec_stdout(
+        oc,
+        target_ns,
+        "projects-data-wb",
+        ["cat", f"{repo}/workbench/connections/workbench-connections.ipynb"],
+    )
+    notebook_execution_ok = notebook_cell_executed(
+        notebook_content, "upload_file"
+    ) and notebook_cell_executed(notebook_content, "download_file")
+    local_ok = exec_ok(
+        oc,
+        target_ns,
+        "projects-data-wb",
+        ["bash", "-lc", f"test -s {source} && test -s {downloaded} && cmp -s {source} {downloaded}"],
+    )
+    object_ok = s3_object_matches_local(
+        oc,
+        target_ns,
+        "projects-data-wb",
+        source,
+        "dataset.csv",
+    )
+    return [
+        check("04-connection", "S3 Connection", secret_ok, "projects-data-connection exact credentials/bucket"),
+        check("04-workbench", "Data Science Workbench", workbench_ok, "projects-data-wb Ready with connection"),
+        check("04-repository", "AI26X-apps RHOAI3.3", repository_ok, "exact remote/branch/notebook"),
+        check(
+            "04-download",
+            "Notebook upload/download와 byte 비교",
+            notebook_execution_ok and local_ok,
+            "saved execution plus dataset.csv equals downloaded-dataset.csv",
+        ),
+        check("04-object", "S3 root dataset", object_ok, "projects-data-bucket/dataset.csv matches local"),
+    ]
+
+
+def grader_05(oc: Any, ns: str) -> list[Check]:
+    notebook = oc.get("notebook.kubeflow.org", "model-training", ns)
+    image_ok = notebook_image_is(
+        notebook,
+        display_name="Jupyter | PyTorch | CUDA | Python 3.12",
+        image_tokens=("pytorch",),
+    )
+    configmap = oc.get("configmap", "model-training-env", ns)
+    env_ok = (
+        dig(configmap, "data", "RANDOM_SIZE") == "40"
+        and notebook_has_source(notebook, "configMap", "model-training-env")
+    )
+    stopped_ok = notebook_is_stopped(oc, ns, "model-training")
+    repo_ok, branch_ok, file_ok = (
+        stopped_notebook_repo_checks(oc, ns, notebook)
+        if stopped_ok
+        else (False, False, False)
+    )
+    return [
+        check("05-image", "PyTorch CUDA 이미지", image_ok, "기존 model-training image 변경"),
+        check("05-env", "RANDOM_SIZE ConfigMap", env_ok, "model-training-env 연결"),
+        check("05-repo", "AI26X-apps remote", repo_ok, "stopped Workbench PVC의 Git remote"),
+        check("05-branch", "RHOAI3.3 branch", branch_ok, "stopped Workbench PVC의 branch"),
+        check(
+            "05-stopped",
+            "검증 후 Workbench 중지",
+            stopped_ok and file_ok,
+            "kubeflow-resource-stopped, Pod 없음, train_model.ipynb 보존",
+        ),
+    ]
+
+
+def grader_06(oc: Any, ns: str) -> list[Check]:
+    requirements = Path.home() / "course" / "labs" / "workbench-custom" / "requirements.txt"
+    requirement_ok = requirement_pinned(requirements, "seaborn", "0.13.2") and requirement_pinned(
+        requirements, "python-json-logger", "2.0.7"
+    )
+    primary_image = "registry.lab.example.com:8443/developer/custom-workbench:1.0"
+    alias_image = "registry.lab.example.com:8443/developer/custom-workbench-image:1.0"
+    build_ok = requirement_ok and local_image_tags_same((primary_image, alias_image))
+    image_stream = None
+    for candidate in oc.list("imagestream.image.openshift.io", "redhat-ods-applications"):
+        meta = candidate.get("metadata", {}) or {}
+        if (
+            (meta.get("labels", {}) or {}).get("opendatahub.io/notebook-image") == "true"
+            and (meta.get("annotations", {}) or {}).get("opendatahub.io/notebook-image-name") == "custom-workbench"
+        ):
+            image_stream = candidate
+            break
+    source_ok = any(
+        dig(tag, "from", "kind") == "DockerImage"
+        and dig(tag, "from", "name")
+        == alias_image
+        for tag in (dig(image_stream, "spec", "tags", default=[]) or [])
+    )
+    metadata_ok = (
+        image_annotation_is(
+            image_stream,
+            "opendatahub.io/notebook-image-desc",
+            "The image provides the seaborn Python package.",
+        )
+        and image_software(image_stream, "Python", "3.12")
+        and image_dependency(image_stream, "seaborn", "0.13.2")
+        and image_dependency(image_stream, "python-json-logger", "2.0.7")
+    )
+    notebook = oc.get("notebook.kubeflow.org", "custom-wb", ns)
+    notebook_ok = notebook_image_is(
+        notebook,
+        display_name="custom-workbench",
+        image_tokens=("custom-workbench",),
+    )
+    runtime_ok = exec_ok(
+        oc,
+        ns,
+        "custom-wb",
+        [
+            "python3",
+            "-c",
+            "import seaborn, pythonjsonlogger; from importlib.metadata import version; "
+            "assert seaborn.__version__ == '0.13.2'; "
+            "assert version('python-json-logger') == '2.0.7'",
+        ],
+    )
+    return [
+        check(
+            "06-build",
+            "Custom image dependencies와 dual tag",
+            build_ok,
+            "requirements pins and same image ID for custom-workbench/custom-workbench-image:1.0",
+        ),
+        check("06-import", "Custom image import", source_ok, "ImageStream source custom-workbench-image:1.0"),
+        check("06-metadata", "Workbench image metadata", metadata_ok, "description/software/two package entries"),
+        check("06-workbench", "custom-wb 생성", notebook_ok and pod_is_ready(oc, ns, "custom-wb"), "custom image Notebook Ready"),
+        check("06-runtime", "두 package 실제 버전", runtime_ok, "seaborn 0.13.2, python-json-logger 2.0.7"),
+    ]
+
+
+TASK07_GIT_PROBE = r'''
+import json
+import pathlib
+import subprocess
+
+repo = pathlib.Path("/opt/app-root/src/AI26X-apps")
+base_remote = "refs/remotes/origin/RHOAI3.3"
+base_local = "refs/heads/RHOAI3.3"
+
+def git(*args):
+    return subprocess.run(
+        ["git", "-c", f"safe.directory={repo}", "-C", str(repo), *args],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+def ok(*args):
+    return git(*args).returncode == 0
+
+def output(*args):
+    result = git(*args)
+    return result.stdout.strip() if result.returncode == 0 else ""
+
+is_repo = output("rev-parse", "--is-inside-work-tree") == "true"
+remote = output("remote", "get-url", "origin") if is_repo else ""
+current = output("branch", "--show-current") if is_repo else ""
+base_refs = is_repo and ok("show-ref", "--verify", "--quiet", base_remote) and ok(
+    "show-ref", "--verify", "--quiet", base_local
+)
+
+feature_branches = []
+notebook_candidates = []
+merged_candidates = []
+if base_refs:
+    refs = output("for-each-ref", "--format=%(refname)", "refs/heads").splitlines()
+    for ref in refs:
+        if ref == base_local or not ref.startswith("refs/heads/"):
+            continue
+        ahead_text = output("rev-list", "--count", f"{base_remote}..{ref}")
+        try:
+            ahead = int(ahead_text)
+        except ValueError:
+            ahead = 0
+        if ahead < 1:
+            continue
+        branch = ref.removeprefix("refs/heads/")
+        feature_branches.append(branch)
+        diff = git(
+            "diff",
+            "--diff-filter=A",
+            "--name-only",
+            "-z",
+            f"{base_remote}..{ref}",
+            "--",
+        )
+        paths = []
+        if diff.returncode == 0:
+            paths = sorted(
+                path
+                for path in diff.stdout.split("\0")
+                if path.lower().endswith(".ipynb")
+                and ok("cat-file", "-e", f"{ref}:{path}")
+                and not ok("cat-file", "-e", f"{base_remote}:{path}")
+            )
+        if not paths:
+            continue
+        candidate = {"branch": branch, "paths": paths}
+        notebook_candidates.append(candidate)
+        if ok("merge-base", "--is-ancestor", ref, base_local):
+            merged_candidates.append(candidate)
+
+print(json.dumps({
+    "repository": base_refs
+        and remote in {
+            "https://github.com/RedHatTraining/AI26X-apps",
+            "https://github.com/RedHatTraining/AI26X-apps.git",
+        }
+        and current == "RHOAI3.3",
+    "feature_branches": sorted(feature_branches),
+    "notebook_candidates": notebook_candidates,
+    "merged_candidates": merged_candidates,
+    "clean": is_repo and output("status", "--porcelain") == "",
+}, sort_keys=True))
+'''
+
+
+def task07_git_evidence(oc: Any, namespace: str) -> dict[str, Any]:
+    raw = exec_stdout(
+        oc,
+        namespace,
+        "model-training",
+        ["python3", "-c", TASK07_GIT_PROBE],
+    )
+    try:
+        evidence = json.loads(raw.strip().splitlines()[-1])
+    except (IndexError, json.JSONDecodeError, TypeError):
+        return {}
+    return evidence if isinstance(evidence, dict) else {}
+
+
+def grader_07(oc: Any, ns: str) -> list[Check]:
+    evidence = task07_git_evidence(oc, ns)
+    repository_ok = evidence.get("repository") is True
+    feature_branches = {
+        branch
+        for branch in (evidence.get("feature_branches") or [])
+        if isinstance(branch, str) and branch and branch != "RHOAI3.3"
+    }
+    notebook_candidates = [
+        candidate
+        for candidate in (evidence.get("notebook_candidates") or [])
+        if isinstance(candidate, dict)
+        and candidate.get("branch") in feature_branches
+        and any(
+            isinstance(path, str) and path.lower().endswith(".ipynb")
+            for path in (candidate.get("paths") or [])
+        )
+    ]
+    merged_candidates = [
+        candidate
+        for candidate in (evidence.get("merged_candidates") or [])
+        if isinstance(candidate, dict)
+        and any(
+            candidate.get("branch") == notebook.get("branch")
+            and candidate.get("paths") == notebook.get("paths")
+            for notebook in notebook_candidates
+        )
+    ]
+    branch_ok = bool(feature_branches)
+    notebook_ok = bool(notebook_candidates)
+    merge_ok = bool(merged_candidates)
+    clean_ok = evidence.get("clean") is True
+    return [
+        check("07-repository", "AI26X-apps RHOAI3.3", repository_ok, "exact remote 및 current baseline branch"),
+        check("07-branches", "feature branch commit", branch_ok, "이름이 자유인 local branch에 remote baseline 이후 commit 존재"),
+        check("07-notebook", "새 Notebook 추적", notebook_ok, "feature branch에서 새 .ipynb 추가·commit"),
+        check("07-merge", "feature branch 병합", merge_ok, "같은 feature branch가 local RHOAI3.3의 ancestor"),
+        check("07-clean", "Workbench Ready·clean worktree", clean_ok and pod_is_ready(oc, ns, "model-training"), "Pod Ready 및 Git clean"),
+    ]
+
+
+def grader_08(oc: Any, ns: str) -> list[Check]:
+    notebook = oc.get("notebook.kubeflow.org", "workbench-connections-wb", ns)
+    secret = oc.get("secret", "my-s3-connection", ns)
+    if secret is None:
+        secret = oc.get("secret", "aws-connection-my-s3-connection", ns)
+    connection_ok = s3_connection_matches(
+        secret,
+        access_key="minio",
+        secret_key="minio123",
+        endpoint="https://minio-api-minio.apps.lab.example.com",
+        region="us-east-1",
+        bucket="saved-models",
+    ) and notebook_has_connection(notebook, ns, "my-s3-connection")
+    repo = "/opt/app-root/src/AI26X-apps"
+    local_ok = local_joblib_model_ok(oc, ns, "workbench-connections-wb", f"{repo}/carido-model.joblib")
+    notebook_path = "workbench/connections/workbench-connections.ipynb"
+    dataset_source = f"{repo}/workbench/connections/dataset.csv"
+    dataset_downloaded = f"{repo}/workbench/connections/downloaded-dataset.csv"
+    downloaded_model = f"{repo}/downloaded-carido-model.joblib"
+    notebook_content = exec_stdout(
+        oc,
+        ns,
+        "workbench-connections-wb",
+        ["git", "-C", repo, "show", f"experiment2:{notebook_path}"],
+    )
+    notebook_ok = (
+        notebook_executed_s3_transfer(
+            notebook_content, "upload_file", "dataset.csv", "./dataset.csv"
+        )
+        and notebook_executed_s3_transfer(
+            notebook_content,
+            "download_file",
+            "dataset.csv",
+            "downloaded-dataset.csv",
+        )
+        and notebook_executed_joblib_save_cell(notebook_content)
+        and notebook_executed_s3_transfer(
+            notebook_content,
+            "upload_file",
+            "carido-model.joblib",
+            f"{repo}/carido-model.joblib",
+        )
+        and notebook_executed_s3_transfer(
+            notebook_content,
+            "download_file",
+            "carido-model.joblib",
+            downloaded_model,
+        )
+    )
+    branches_ok = git_check(
+        oc,
+        ns,
+        "workbench-connections-wb",
+        f"url=$(git -C {repo} remote get-url origin) && "
+        "{ test \"$url\" = https://github.com/RedHatTraining/AI26X-apps.git || "
+        "test \"$url\" = https://github.com/RedHatTraining/AI26X-apps; } && "
+        f"test \"$(git -C {repo} branch --show-current)\" = RHOAI3.3 && "
+        f"git -C {repo} show-ref --verify --quiet refs/heads/experiment2 && "
+        f"git -C {repo} cat-file -e experiment2:{notebook_path} && "
+        f"! git -C {repo} cat-file -e experiment2:carido-model.joblib 2>/dev/null && "
+        f"! git -C {repo} cat-file -e experiment2:downloaded-carido-model.joblib 2>/dev/null && "
+        f"! git -C {repo} diff --quiet origin/RHOAI3.3..experiment2 -- {notebook_path}",
+    )
+    merge_ok = git_check(
+        oc,
+        ns,
+        "workbench-connections-wb",
+        f"git -C {repo} show-ref --verify --quiet refs/remotes/origin/RHOAI3.3 && "
+        f"git -C {repo} merge-base --is-ancestor experiment2 RHOAI3.3 && "
+        f"test \"$(git -C {repo} rev-list --count origin/RHOAI3.3..experiment2)\" -ge 1 && "
+        f"test -z \"$(git -C {repo} status --porcelain)\"",
+    )
+    dataset_object_ok = s3_object_matches_local(
+        oc,
+        ns,
+        "workbench-connections-wb",
+        dataset_source,
+        "dataset.csv",
+        dataset_downloaded,
+    )
+    model_object_ok = s3_object_matches_local(
+        oc,
+        ns,
+        "workbench-connections-wb",
+        f"{repo}/carido-model.joblib",
+        "carido-model.joblib",
+        downloaded_model,
+    )
+    object_ok = dataset_object_ok and model_object_ok
+    return [
+        check("08-connection", "S3 connection 연결", connection_ok, "my-s3-connection/saved-models와 Notebook 참조"),
+        check("08-local", "학습 Notebook과 로컬 model artifact", local_ok and notebook_ok, "실행된 save cell과 AI26X-apps/carido-model.joblib"),
+        check("08-branch", "experiment2 branch", branches_ok, "workbench-connections.ipynb commit 존재"),
+        check("08-merge", "RHOAI3.3 병합", merge_ok, "experiment2 ancestor"),
+        check(
+            "08-object",
+            "S3 dataset/model artifact round trip",
+            object_ok,
+            "remote/downloaded dataset.csv and carido-model.joblib exactly match local source bytes",
+        ),
+    ]
+
+
+def grader_09(oc: Any, ns: str) -> list[Check]:
+    target_ns = "tiger"
+    project = oc.get("namespace", target_ns)
+    secret = oc.get("secret", "rhoaiserving-using", target_ns)
+    if secret is None:
+        secret = oc.get("secret", "aws-connection-rhoaiserving-using", target_ns)
+    connection_ok = project is not None and s3_connection_matches(
+        secret,
+        access_key="minio",
+        secret_key="minio123",
+        endpoint="https://minio-api-minio.apps.lab.example.com",
+        region="us-east-1",
+        bucket="models-bucket",
+    )
+
+    service = oc.get("inferenceservice.serving.kserve.io", "diabetes", target_ns)
+    model = dig(service, "spec", "predictor", "model", default={}) or {}
+    runtime_name = str(model.get("runtime", ""))
+    model_format = model.get("modelFormat", {}) or {}
+    storage = model.get("storage", {}) or {}
+    storage_key = str(storage.get("key", ""))
+    storage_path = str(storage.get("path", "")).strip("/")
+    storage_uri = str(model.get("storageUri", "")).rstrip("/")
+    storage_ok = (
+        storage_key in {"rhoaiserving-using", "aws-connection-rhoaiserving-using"}
+        and storage_path == "models/diabetes"
+    ) or storage_uri == "s3://models-bucket/models/diabetes"
+    spec_ok = (
+        str(annotations(service).get("serving.kserve.io/deploymentMode", "")).lower()
+        == "rawdeployment"
+        and str(model_format.get("name", "")).lower() == "onnx"
+        and str(model_format.get("version", "")) == "1"
+        and storage_ok
+        and serving_runtime_is_openvino_onnx(oc, target_ns, runtime_name)
+    )
+    ready_ok = ready(service)
+    routes = [
+        route
+        for route in oc.list("route.route.openshift.io", target_ns)
+        if resource_name(route) == "diabetes" or resource_name(route).startswith("diabetes-")
+    ]
+    route = next((item for item in routes if bool(dig(item, "spec", "host"))), None)
+    auth_disabled = annotations(service).get("security.opendatahub.io/enable-auth") == "false"
+    route_ok = route is not None and auth_disabled
+    inference_ok = bool(
+        route
+        and unauthenticated_v2_inference_ok(str(dig(route, "spec", "host", default="")), "diabetes")
+    )
+    return [
+        check("09-project", "tiger 프로젝트와 S3 connection", connection_ok, "rhoaiserving-using exact credentials/bucket"),
+        check("09-spec", "diabetes InferenceService", spec_ok, "OpenVINO runtime, RawDeployment, onnx-1, connection/path"),
+        check("09-ready", "InferenceService Started", ready_ok, "diabetes Ready=True"),
+        check("09-route", "외부 Route·인증 비활성", route_ok, "Route host 및 enable-auth=false"),
+        check("09-inference", "무인증 KServe V2 추론", inference_ok, "/v2/models/diabetes/infer HTTP 200"),
+    ]
+
+
+def grader_10(oc: Any, ns: str) -> list[Check]:
+    dspas = oc.list("datasciencepipelinesapplication.datasciencepipelinesapplications.opendatahub.io", ns)
+    dspa_ok = any(dspa_ready(item) for item in dspas)
+    compiled_content = read_text_if_file("/tmp/simple_rhoai_pipeline.yaml")
+    compiled_ok = compiled_kfp_ir_matches(compiled_content, "tas1-devops-wala", "2.15.2")
+    schedules = oc.list("scheduledworkflow.kubeflow.org", ns)
+    schedule = next((item for item in schedules if workflow_named(item, "tas1-devops-wala-s1")), None)
+    schedule_exists = bool(schedule and schedule_references_pipeline(schedule, "tas1-devops-wala"))
+    schedule_ok = bool(schedule and schedule_is_enabled_five_minutes(schedule))
+    all_workflows = workflows(oc, ns)
+    run_ok = bool(schedule and any(workflow_links_to_schedule(item, schedule) for item in all_workflows))
+    return [
+        check("10-dspa", "Pipeline Server Ready", dspa_ok, "DSPA Ready=True"),
+        check("10-compile", "KFP 2.15.2 pipeline compile", compiled_ok, "simple_rhoai_pipeline.yaml/tas1-devops-wala"),
+        check("10-import", "Pipeline schedule 연결", schedule_exists, "tas1-devops-wala-s1 존재"),
+        check("10-schedule", "활성 5분 schedule", schedule_ok, "Periodic intervalSecond=300"),
+        check("10-run", "Scheduled run 성공", run_ok, "schedule-linked Workflow Succeeded"),
+    ]
+
+
+def grader_11(oc: Any, ns: str) -> list[Check]:
+    dspas = oc.list("datasciencepipelinesapplication.datasciencepipelinesapplications.opendatahub.io", ns)
+    connection = oc.get("secret", "my-s3-connection", ns)
+    connection_ok = s3_connection_matches(
+        connection,
+        access_key="minio",
+        secret_key="minio123",
+        endpoint="https://minio-api-minio.apps.lab.example.com",
+        region="us-east-1",
+        bucket="saved-models",
+    )
+    dspa = next(
+        (
+            item
+            for item in dspas
+            if dspa_ready(item)
+            and dig(item, "spec", "objectStorage", "externalStorage", "bucket") == "saved-models"
+            and dig(
+                item,
+                "spec",
+                "objectStorage",
+                "externalStorage",
+                "s3CredentialsSecret",
+                "secretName",
+            )
+            == "my-s3-connection"
+        ),
+        None,
+    )
+    dspa_ok = dspa is not None and connection_ok
+    pods_ok = pipeline_server_pods_ready(oc, ns)
+
+    compiled_content = read_text_if_file("/tmp/ai267-task11/carido-training-pipeline.yaml")
+    stages = ["generate-data", "preprocess-data", "train-model", "save-model"]
+    compiled_ok = compiled_kfp_ir_matches(
+        compiled_content,
+        "carido-training-pipeline",
+        "2.15.2",
+    ) and compiled_pipeline_has_ordered_chain(compiled_content, stages)
+
+    run = next(
+        (
+            item
+            for item in workflows(oc, ns)
+            if workflow_named(item, "carido-training-r1") and phase(item).lower() == "succeeded"
+        ),
+        None,
+    )
+    run_ok = bool(run and workflow_stages_succeeded(run, stages))
+    artifact_ok = s3_fixture_object_exists("saved-models", "carido-model.joblib")
+    return [
+        check("11-dspa", "Pipeline Server와 object storage", dspa_ok, "Ready DSPA uses my-s3-connection/saved-models"),
+        check("11-pods", "Pipeline 구성 요소", pods_ok, "API/persistence/scheduler Pods Ready"),
+        check("11-compile", "4단계 KFP 2.15.2 pipeline", compiled_ok, "carido-training-pipeline.yaml"),
+        check("11-run", "carido 4단계 run", run_ok, "carido-training-r1 and all stages Succeeded"),
+        check(
+            "11-artifact",
+            "S3 root model object",
+            artifact_ok,
+            "saved-models/carido-model.joblib GET body is non-empty",
+        ),
+    ]
+
+
+def grader_12(oc: Any, ns: str) -> list[Check]:
+    dspas = oc.list("datasciencepipelinesapplication.datasciencepipelinesapplications.opendatahub.io", ns)
+    dspa_ok = any(dspa_ready(item) for item in dspas)
+    notebook_name = "pipelines-elyra-wb"
+    notebook = oc.get("notebook.kubeflow.org", notebook_name, ns)
+    workbench_ok = (
+        notebook_image_is(
+            notebook,
+            display_name="Jupyter | Data Science | CPU | Python 3.12",
+            image_tokens=("generic-data-science",),
+        )
+        and notebook_has_bound_storage(oc, ns, notebook, {"10Gi", "10240Mi"})
+        and notebook_has_connection(notebook, ns, "s3-minio")
+        and pod_is_ready(oc, ns, notebook_name)
+    )
+    repository_ok = git_check(
+        oc,
+        ns,
+        notebook_name,
+        "url=$(git -C /opt/app-root/src/AI26X-apps remote get-url origin) && "
+        "{ test \"$url\" = https://github.com/RedHatTraining/AI26X-apps.git || "
+        "test \"$url\" = https://github.com/RedHatTraining/AI26X-apps; } && "
+        "test \"$(git -C /opt/app-root/src/AI26X-apps branch --show-current)\" = RHOAI3.3 && "
+        "test -f /opt/app-root/src/AI26X-apps/dspa/elyra/issues_prediction.pipeline",
+    )
+    pipeline_content = exec_stdout(
+        oc,
+        ns,
+        notebook_name,
+        ["cat", "/opt/app-root/src/AI26X-apps/dspa/elyra/issues_prediction.pipeline"],
+    )
+    nodes_ok, outputs_ok = elyra_pipeline_checks(pipeline_content)
+    pipeline_ok = (
+        nodes_ok
+        and outputs_ok
+        and elyra_pipeline_settings_ok(pipeline_content)
+        and elyra_runtime_image_metadata_ok(oc, ns, notebook_name)
+    )
+    run_ok = any(
+        workflow_named(item, "issues_prediction") and phase(item).lower() == "succeeded"
+        for item in workflows(oc, ns)
+    )
+    s3_ok = s3_prefix_has(
+        oc,
+        ns,
+        notebook_name,
+        ["data.csv", "clean-data.csv", "forecast-data.csv"],
+    )
+    return [
+        check(
+            "12-workbench",
+            "10 GiB Data Science Workbench",
+            workbench_ok,
+            "pipelines-elyra-wb Ready, s3-minio attached",
+        ),
+        check("12-repository", "AI26X-apps RHOAI3.3", repository_ok, "exact remote/branch/path"),
+        check(
+            "12-pipeline",
+            "Elyra runtime·Secret·3-node graph",
+            pipeline_ok,
+            "custom image, exact four mappings, ordered nodes and outputs",
+        ),
+        check("12-run", "issues_prediction run", dspa_ok and run_ok, "DSPA Ready and Workflow Succeeded"),
+        check("12-s3", "S3 결과 파일", s3_ok, "timestamp folder의 세 output"),
+    ]
+
+
+GRADERS: dict[str, Callable[[Any, str], list[Check]]] = {
+    "01": grader_01,
+    "02": grader_02,
+    "03": grader_03,
+    "04": grader_04,
+    "05": grader_05,
+    "06": grader_06,
+    "07": grader_07,
+    "08": grader_08,
+    "09": grader_09,
+    "10": grader_10,
+    "11": grader_11,
+    "12": grader_12,
 }
 
 
-def main() -> int:
+def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("task", choices=sorted(TASKS))
-    parser.add_argument("--json", action="store_true", dest="as_json")
-    args = parser.parse_args()
+    parser.add_argument("--json", action="store_true")
+    args = parser.parse_args(argv)
 
-    namespace, maximum, title = TASKS[args.task]
-    oc = Oc()
-    if oc.run("whoami").returncode != 0:
-        print("OpenShift에 먼저 로그인하세요: oc login ...", file=sys.stderr)
-        return 2
+    task = TASKS[args.task]
+    results = GRADERS[args.task](Oc(), task.namespace)
+    maximum = sum(item.points for item in results)
+    score = sum(item.points for item in results if item.passed)
+    passed = score == maximum == task.points
 
-    results = GRADERS[args.task](oc, namespace)
-    earned = sum(item.points for item in results if item.passed)
-
-    if args.as_json:
-        print(json.dumps({
-            "task": args.task,
-            "title": title,
-            "namespace": namespace,
-            "earned": earned,
-            "maximum": maximum,
-            "passed": earned == maximum,
-            "checks": [asdict(item) for item in results],
-        }, ensure_ascii=False, indent=2))
+    if args.json:
+        print(
+            json.dumps(
+                {
+                    "task": task.task_id,
+                    "title": task.title,
+                    "namespace": task.namespace,
+                    "score": score,
+                    "maximum": maximum,
+                    "passed": passed,
+                    "checks": [asdict(item) for item in results],
+                },
+                ensure_ascii=False,
+                indent=2,
+            )
+        )
     else:
-        print(f"Task {args.task} · {title} · namespace {namespace}")
-        print("=" * 72)
+        print(f"Task {task.task_id} · {task.title}")
+        print(f"Project: {task.namespace}\n")
         for item in results:
-            mark = "PASS" if item.passed else "FAIL"
-            score = item.points if item.passed else 0
-            print(f"[{mark}] {item.check_id}  {score:>2}/{item.points}  {item.description}")
+            marker = "PASS" if item.passed else "FAIL"
+            print(f"[{marker}] {item.points:>3}  {item.title}")
             print(f"       {item.detail}")
-        print("-" * 72)
-        print(f"SCORE: {earned}/{maximum}")
-
-    return 0 if earned == maximum else 1
+        print(f"\nScore: {score}/{maximum}")
+        print("Result: PASS" if passed else "Result: NOT YET")
+    return 0 if passed else 1
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
-
+    sys.exit(main())

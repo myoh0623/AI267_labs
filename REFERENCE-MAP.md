@@ -1,21 +1,36 @@
-# AI267 v3.3 참고 리소스 매핑
+# AI267 3.3 참고 자료
 
-| EX267 문제 | 참고한 AI267 v3.3 리소스 |
+기준 문서는 로컬 AI267 3.3 EPUB Edition 2(2026-07-02)다.
+
+- `intro.xhtml`: `intro-projects`
+- `workbenches.xhtml`: `workbench-creating`, `workbench-connections`, `workbench-working`, `workbench-custom`
+- `servingruntimes.xhtml`: `serving-openvino`
+- `dspa.xhtml`: `dspa-intro`, `dspa-elyra`, `dspa-kubeflow`
+
+공개 예제 코드는 <https://github.com/RedHatTraining/AI26X-apps>의 `RHOAI3.3` branch와 공식 Lab이 제공하는 `~/course/labs` 파일을 사용한다.
+
+원문에서 결과로 요구한 식별자는 유지한다. Task 01은 `my-lab-pro`/`myworkbench-wb`, Task 04는 `projects-data`/`projects-data-bucket`/`projects-data-connection`/`projects-data-wb`, Task 08은 `my-s3-connection`/`saved-models`/`carido-model.joblib`, Task 09는 `tiger`/`rhoaiserving-using`/`diabetes`, Task 10은 `tas1-devops-wala`/`tas1-devops-wala-s1`/5분, Task 11은 `my-s3-connection`/`saved-models`/`carido-model.joblib`, Task 12는 `pipelines-elyra-wb`/`forecast-pipeline-runtime`/`issues_prediction`을 사용한다.
+
+구형 Lab이 제공하던 환경 식별자는 공식 3.3 Lab 계약으로 바꾼다. Task 05와 Task 07은 `workbench-working/model-training`, Task 08은 `workbench-connections/workbench-connections-wb`, Task 10은 `dspa-kubeflow`, Task 11은 `dspa-intro`와 KFP v2 synthetic starter를 사용한다. 저장소 baseline branch와 starter 경로도 `RHOAI3.3` branch의 실제 구조로 바꾼다. Task 07의 사용자 feature branch 이름과 새 Notebook 경로는 원문처럼 자유다. 이 변경은 `SOURCE-MAP.md`에 구형 값과 새 값을 함께 기록한다.
+
+안전과 자료 충돌을 처리하는 예외는 다음과 같다.
+
+- 설치 문서는 이미 구성된 course cluster의 Operator·DSC를 다시 변경하지 않도록 비채점 사전조건으로 둔다.
+- Task 01은 서로 충돌하는 admin/suraj 지시 중 개요의 admin 작업 흐름을 따르고, OAuth identity를 만들지 않은 채 `suraj` Contributor RBAC을 평가한다.
+- Task 03은 cluster 전체 설정 대신 task namespace의 `HardwareProfile`로 동일한 선택지 변경을 연습한다.
+- custom image 풀이 끝의 문맥과 무관한 joblib 복사 문단은 Task 06 범위에서 제외하고 Task 08의 model 저장 문제에서 다룬다.
+- Task 09는 OpenVINO version directory에 합성 ONNX model을 제공하므로 artifact 이름과 입력 shape가 원문 예제와 다르다. project·Connection·deployment·storage parent path와 무인증 external route 목표는 유지한다.
+- Task 12는 `forecast-pipeline-runtime` display name을 유지하고 3.3 공식 `registry.lab.example.com:8443/redhattraining/dspa-elyra-runtime:v2.0` image를 연결한다. 이 image는 RHOAI 3.3 Dashboard step log 확인에 필요한 2025.2+ runtime 계약을 따른다.
+
+## 핵심 API
+
+| 목적 | RHOAI 3.3 API |
 | --- | --- |
-| 01 | `chapter-01-projects`, 플랫폼 설치/DSC 확인, Dashboard `Auth`, Project·RoleBinding·S3 connection 형식 |
-| 02 | `chapter-02-workbench`의 Notebook·PVC·ImageStream·BuildConfig, HardwareProfile, custom image, Git, S3 형식 |
-| 03 | `chapter-06-pipelines`, `chapter-07-pipeline-operations`, RHOAI 3.3 Elyra guided exercise와 공개 `RedHatTraining/AI26X-apps`의 DSPA·KFP·artifact/experiment 형식 |
-| 04 | `chapter-03-model-serving`, `chapter-04-model-storage`, RHOAI 3.3 custom runtime/OpenVINO guided exercise의 ServingRuntime·InferenceService·V2·token 형식 |
-| 05 | Chapter 3/4 serving 리소스와 AI267 3.3 GPU·vLLM 학습 자료 |
-| 06 | AI267 3.3 `serving-modelregistry` Lab의 MariaDB·ONNX v1/v2·OCI ModelCar와 v1beta1 API 계약 |
-| 07 | `chapter-05-trustyai`의 TrustyAIService·capture·monitoring 형식 |
-| 08 | `chapter-08-optimization-evaluation`의 quantization Job·LMEvalJob 형식 |
-| 09 | `chapter-09-genai-patterns`의 mock LLM·RAG·tool·guardrail 애플리케이션 |
-| 10 | Chapter 2/6/7/8/9의 digest·run·artifact·rollback 증적을 통합 |
+| Workbench | `kubeflow.org/v1`, `Notebook` |
+| Workbench resources | `infrastructure.opendatahub.io/v1`, `HardwareProfile` |
+| Dashboard access | `services.platform.opendatahub.io/v1alpha1`, `Auth` |
+| Pipeline server | `datasciencepipelinesapplications.opendatahub.io/v1`, `DataSciencePipelinesApplication` |
+| Kubernetes pipeline store | `pipelines.kubeflow.org/v2beta1`, `Pipeline`/`PipelineVersion` |
+| Predictive serving | `serving.kserve.io/v1beta1`, `InferenceService` |
 
-이 연습 환경은 공개 학습 자료 기반의 비공식 모의 과제이며, 실제 시험에서 유출된 리소스나 공식 채점 스크립트가 아니다.
-
-AI26X 참고 기준은 <https://github.com/RedHatTraining/AI26X-apps>의 `main` commit `3ac8cb012785f19060457c91c9ef56ee963fc0fe`이다. 해당 저장소의 Python 3.9 예제를 그대로 복제하지 않고, Task 03의 합성 데이터와 RHOAI 3.3 Python 3.12/KFP v2 계약에 맞게 다시 작성했다.
-
-추가 비교 기준은 <https://github.com/anishrana2001/Openshift/tree/40d6458045d7134c9aa1f15d749325faa3bc6062/EX267-V2.13>이다. 해당 commit의 Markdown 34개를 모두 열거한 대응표는 [V213-COVERAGE.md](V213-COVERAGE.md)와 [source-coverage.yaml](source-coverage.yaml)에 있다. 원문 해설을 복제하지 않고 각 실습 행동을 현재 10개 문제와 RHOAI 3.3 리소스에 재구성했다.
-
+이 저장소는 공개 학습 자료를 현재 버전에 맞게 재구성한 비공식 연습 환경이다. 실제 시험 유출 문제나 Red Hat 공식 채점 스크립트가 아니다.

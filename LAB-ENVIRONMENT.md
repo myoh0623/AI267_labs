@@ -1,88 +1,44 @@
-# 교재 Lab 기반 시험 환경
+# AI267 3.3 공식 Lab 연결
 
-교재의 검증된 예제를 별도 `ai267-chXX-*` namespace에 준비하고, EX267-V2.13 번호형 실습의 학습 행동은 Task 01~04의 채점 항목으로 연결한다. 응시자는 OpenShift AI 3.3의 정상 리소스 형태와 동작을 확인한 다음 `ex267-*` 시험 namespace에서 직접 문제를 푼다.
+모든 문제는 하나의 공식 Lab을 독립적으로 실행한다. 다음 문제를 시작하기 전에 현재 문제를 `finish` 또는 `reset`해야 한다.
 
-## 사용 순서
+| Task | 시작 | 종료 | 공식 Lab baseline project | 문제 풀이 target |
+| --- | --- | --- | --- | --- |
+| 01 | `lab start workbench-creating` | `cd && lab finish workbench-creating` | `workbench-creating` | `my-lab-pro` (학습자 생성) |
+| 02 | `lab start intro-projects` | `cd && lab finish intro-projects` | `intro-projects` | cluster-scoped `Auth/auth`와 `Group` |
+| 03 | `lab start workbench-creating` | `cd && lab finish workbench-creating` | `workbench-creating` | `workbench-creating` |
+| 04 | `lab start workbench-connections` | `cd && lab finish workbench-connections` | `workbench-connections` | `projects-data` (custom base project) |
+| 05 | `lab start workbench-working` | `cd && lab finish workbench-working` | `workbench-working` | `workbench-working` |
+| 06 | `lab start workbench-custom` | `cd && lab finish workbench-custom` | `workbench-custom` | `workbench-custom` |
+| 07 | `lab start workbench-working` | `cd && lab finish workbench-working` | `workbench-working` | `workbench-working` |
+| 08 | `lab start workbench-connections` | `cd && lab finish workbench-connections` | `workbench-connections` | `workbench-connections` |
+| 09 | `lab start serving-openvino` | `cd && lab finish serving-openvino` | `serving-openvino` | `tiger` (학습자 생성) |
+| 10 | `lab start dspa-kubeflow` | `cd && lab finish dspa-kubeflow` | `dspa-kubeflow` | `dspa-kubeflow` |
+| 11 | `lab start dspa-intro` | `cd && lab finish dspa-intro` | `dspa-intro` | `dspa-intro` |
+| 12 | `lab start dspa-elyra` | `cd && lab finish dspa-elyra` | `dspa-elyra` | `dspa-elyra` |
 
-```bash
-oc login https://api.<cluster>:6443
+## wrapper 동작
 
-bash install-ai267.sh
-ai267 start 01
-# 웹 문제의 요구 사항 수행
-ai267 inspect 01
-ai267 finish 01
-```
+`ai267 NN`은 다음 순서로 동작한다.
 
-`finish`는 만점일 때만 리소스를 자동 정리한다. 부분 점수나 실패가 있으면 수정과 재채점을 위해 리소스를 보존한다.
+1. 다른 Task state와 위 공식 Lab들의 `Started` 상태를 확인한다.
+2. 정확한 `lab start`를 실행한다.
+3. 해당 문제에만 필요한 안전한 fixture를 준비한다.
+4. 문제 README를 터미널에 표시한다.
 
-단축 명령을 설치하지 않는 경우에만 아래 원본 명령을 사용한다.
+`ai267 finish NN`은 custom grader가 100점일 때만 공식 `lab finish`를 호출한다. Task 02의 전역 설정 복구 hook은 성공·reset 모두에서 실행된다.
 
-```bash
+## 공식 Lab과 custom fixture
 
-./exam-lab.sh lab-env list
-./exam-lab.sh lab-env switch 01
-./exam-lab.sh preflight-all
-./exam-lab.sh prepare-all
-./exam-lab.sh status-all
-```
+- Task 01은 RBAC 참조용 User 객체와 전역 2 CPU/8 GiB profile만 보충한다. `my-lab-pro`, RoleBinding, Workbench는 학습자가 직접 만든다.
+- Task 02는 EPUB에 동일한 user-management GE가 없어 `intro-projects`를 기반으로 누락된 User 객체만 보충한다. `Auth`, 전체 Group 목록, ClusterRoleBinding을 검증된 JSON으로 원자적 백업하며 전역 접근 설정은 start가 변경하지 않는다.
+- Task 03은 제거 대상 `Large`, `X Large` profile만 보충한다.
+- Task 04는 공식 Lab의 MinIO만 사용하고 빈 `projects-data` 프로젝트를 보충한다. `projects-data-bucket`, `projects-data-connection`, `projects-data-wb`는 학습자가 직접 만든다.
+- Task 05·07은 공식 Lab의 프로젝트, 기존 Workbench와 자료를 사용한다. Task 06은 공식 프로젝트와 build 자료만 사용하며 custom image와 `custom-wb`는 학습자가 만든다.
+- Task 08은 답안 객체 `carido-model.joblib`이 없는 `saved-models` bucket과 합성 학습 코드 `train_carido_model.py`를 준비하고 Workbench PVC에도 복사한다. Connection과 모델 결과는 만들지 않는다.
+- Task 09는 `models-bucket/models/diabetes/1/model.onnx`에 작은 합성 ONNX 입력만 준비한다. `tiger`, Connection, `InferenceService`는 만들지 않는다.
+- Task 10은 `/tmp/simple_pipeline.py` starter와 ownership marker만 든 빈 가상환경 디렉터리를 준비한다. 학습자가 `uv venv --allow-existing`으로 환경을 초기화하며, Pipeline definition, schedule, run은 만들지 않는다.
+- Task 11은 답안 객체가 없는 `saved-models` bucket, Dashboard용 `my-s3-connection` 입력, `/tmp/ai267-task11/carido_pipeline.py`의 standalone component 구현을 준비한다. 완성된 graph/YAML, Pipeline Server, definition, run은 만들지 않는다.
+- Task 12는 공식 Lab의 `dspa-elyra` project·DSPA·`s3-minio`·bucket 입력만 사용하고, 원문 mapping 이름을 위한 `aws-connection-s3-minio` compatibility Secret만 보충한다. `pipelines-elyra-wb`, custom Runtime Image, pipeline graph와 run은 만들지 않는다.
 
-한 문제만 연습할 때는 다음처럼 실행한다.
-
-```bash
-./exam-lab.sh lab-env switch 04
-./exam-lab.sh prepare 04
-./exam-lab.sh grade 04
-```
-
-Task 01·02·03의 교재 환경, Task 04의 모델 저장소, Task 08의 offline LM-Eval cache와 Task 10의 replay artifact는 MinIO를 사용한다. `ai267 start`가 `minio/minio-secret`에서 자격 증명을 자동으로 읽으므로 사용자가 access key나 secret key를 입력할 필요가 없다. 값은 저장소나 터미널 출력에 기록되지 않는다.
-
-```bash
-ai267 start 01
-# Console: Workloads -> Secrets -> exam-provided-minio
-```
-
-Task 01·02·03·04·08·10에는 문제 전용 bucket과 `exam-provided-minio`가 자동 생성된다. 이 Secret은 시험지에서 제공하는 endpoint, bucket, access key, secret key에 해당하는 **입력 자료**다. 채점 대상인 `fraud-s3`, `projects-data-connection`, `aws-connection-fraud-s3`는 `REPLACE_ME` 상태로 유지되며, 응시자가 Console에서 제공값을 적용하고 올바른 annotation·리소스 설정을 완성해야 한다.
-
-## 문제별 연결
-
-| Task | 교재 기준 환경 | 목적 |
-| --- | --- | --- |
-| 01 | Chapter 01 | Project/RBAC 정상 예시와 설치된 RHOAI/DSC 확인 |
-| 02 | Chapter 02 | S3 connection, Workbench, PVC, custom image, BuildConfig의 정상 예시 |
-| 03 | Chapter 06 | DSPA, KFP v2, Elyra, object storage의 정상 예시 |
-| 04 | Chapter 04 | OpenVINO/Custom ServingRuntime, KServe V2, route/token의 정상 예시 |
-| 06 | `serving-modelregistry` | Registry component, MariaDB, ONNX v1/v2와 PVC·pull Secret을 갖춘 시험 전용 OCI registry |
-| 07 | Chapter 05 | TrustyAI capture, reference data, drift request의 정상 예시 |
-| 08 | Chapter 08 | CPU 양자화 결과와 LMEvalJob server-side schema 검증 |
-| 09 | Chapter 09 | mock LLM, ACL/streaming 미완성 RAG, 쓰기 tool을 강화하는 기준 환경 |
-
-Task 05는 물리 GPU가 필요하므로 교재 환경으로 GPU를 대신 만들지 않는다. Task 06은 `lab start serving-modelregistry`를 사용해 현재 클러스터에서 비활성화된 component를 교재 기준으로 활성화한다. Task 10은 앞선 문제의 결과를 연결하는 통합 과제라 별도 교재 Lab 대신 합성 replay artifact를 제공한다.
-
-Task 06에서 사용한 교재 Lab은 다른 문제로 전환하거나 `ai267 finish 06`을 실행할 때 `lab finish serving-modelregistry`로 정리된다. Task 08은 클러스터 online 정책을 바꾸지 않고 MinIO의 고정 offline cache를 사용한다.
-
-## 상태 확인과 정리
-
-```bash
-./exam-lab.sh lab-env status all
-./exam-lab.sh lab-env cleanup all --yes
-./exam-lab.sh cleanup-all --yes
-```
-
-두 namespace 집합은 분리되어 있으므로 교재 기준 환경이 시험 정답을 자동 완성하지 않는다.
-
-## 한 번에 하나만 실행
-
-교재 Lab은 동시에 여러 개를 준비하지 않는다. 다음 문제로 이동할 때 `switch`를 실행하면 이전 `ai267-chXX-*` namespace를 먼저 정리하고 선택한 문제의 Lab 하나만 준비한다. Chapter 02의 공용 이미지 카탈로그와 Chapter 06·07의 MinIO bucket은 전환 중 보존한다.
-
-```bash
-./exam-lab.sh lab-env switch 03
-# Task 03 연습
-
-./exam-lab.sh lab-env switch 04
-# Chapter 06 환경 정리 후 Chapter 04 환경 준비
-```
-
-`lab-env prepare all`은 의도적으로 거부된다.
-
-인증서 kubeconfig처럼 `oc whoami -t`가 토큰을 반환하지 않는 환경에서는 Chapter 02의 Workbench OAuth URL 검사 대신 Workbench Pod Ready를 확인한다. PVC, S3 Connection, 커스텀 이미지 빌드와 카탈로그 등록은 그대로 수행한다.
+각 custom fixture는 시작 전 기존 파일·객체를 거부하거나 백업하고, `finish/reset`에서 task가 만든 범위만 삭제하거나 원본을 복원한다. Task 08·09·11이 직접 만든 S3 bucket은 무작위 ownership object가 로컬 token과 정확히 일치할 때만 전체 삭제한다. S3 의존 cleanup은 공식 Lab을 종료하기 전에 수행한다.

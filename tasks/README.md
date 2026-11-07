@@ -1,18 +1,24 @@
-# 문제 지침
+# 문제 목록
 
-각 문제는 `ai267 start NN`으로 시작하고 해당 디렉터리의 `README.md` 요구를 OpenShift/RHOAI Console 또는 동등한 CLI 리소스로 수행한다. `ai267 grade NN`은 실제 리소스를 읽어 부분 점수를 표시하며 `ai267 finish NN`은 만점일 때만 해당 문제와 활성 교재 Lab을 정리한다.
+| Task | 지침 | Lab |
+| --- | --- | --- |
+| 01 | [프로젝트 권한과 Workbench](01-project-workbench/README.md) | `workbench-creating` |
+| 02 | [RHOAI 사용자·그룹 접근 제어](02-dashboard-access/README.md) | `intro-projects` |
+| 03 | [Hardware Profile과 Git 작업](03-hardware-profile-git/README.md) | `workbench-creating` |
+| 04 | [S3 Connection과 객체 검증](04-data-connection/README.md) | `workbench-connections` |
+| 05 | [기존 Workbench 수정](05-modify-workbench/README.md) | `workbench-working` |
+| 06 | [Custom Image와 package metadata](06-custom-image/README.md) | `workbench-custom` |
+| 07 | [Git Notebook 협업](07-git-collaboration/README.md) | `workbench-working` |
+| 08 | [`carido-model.joblib` S3 저장](08-s3-model/README.md) | `workbench-connections` |
+| 09 | [OpenVINO `diabetes` 단일 모델 배포](09-openvino-serving/README.md) | `serving-openvino` |
+| 10 | [Kubeflow 5분 Schedule](10-kubeflow-pipeline/README.md) | `dspa-kubeflow` |
+| 11 | [Pipeline Server와 `carido` 모델 Pipeline](11-pipeline-server/README.md) | `dspa-intro` |
+| 12 | [Elyra Pipeline](12-elyra-pipeline/README.md) | `dspa-elyra` |
 
-| Task | 지침 | 배점 구조 |
-|---|---|---:|
-| 01 | [사용자·프로젝트·S3](01-foundation/README.md) | 7 × 3 = 21 |
-| 02 | [Workbench·이미지·Git·S3](02-workbench/README.md) | 10 × 3 = 30 |
-| 03 | [KFP·Elyra Pipeline·예약 실행](03-pipeline/README.md) | 9 × 4 = 36 |
-| 04 | [OpenVINO·Custom Runtime·인증](04-predictive-serving/README.md) | 9 × 4 = 36 |
-| 05 | [vLLM·GPU](05-vllm-gpu/README.md) | 5 × 6 = 30 |
-| 06 | [Model Registry](06-model-registry/README.md) | 5 × 6 = 30 |
-| 07 | [TrustyAI·모니터링](07-monitoring/README.md) | 5 × 6 = 30 |
-| 08 | [최적화·LMEval](08-optimization/README.md) | 4 × 6 = 24 |
-| 09 | [Guardrailed RAG](09-rag/README.md) | 5 × 6 = 30 |
-| 10 | [재현·증적·롤백](10-evidence/README.md) | 4 × 6 = 24 |
+모든 문제는 다음 흐름으로 한 번에 하나씩 실행한다.
 
-번호형 V2.13 Markdown 전체 대응은 루트의 [V213-COVERAGE.md](../V213-COVERAGE.md)를 확인한다.
+```bash
+ai267 NN
+ai267 grade NN
+ai267 finish NN
+```

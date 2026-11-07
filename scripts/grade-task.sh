@@ -6,7 +6,7 @@ source "${SCRIPT_DIR}/lab-common.sh"
 
 task=$1
 shift
+lab_load_task "${task}"
 lab_require_login
 lab_require_command python3
 exec python3 "${SCRIPT_DIR}/grade.py" "${task}" "$@"
-

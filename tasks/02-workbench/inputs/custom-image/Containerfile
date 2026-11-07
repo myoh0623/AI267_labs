@@ -1,9 +1,0 @@
-FROM registry.redhat.io/rhoai/odh-workbench-jupyter-minimal-cpu-py312-rhel9@sha256:44c8c2789b1773d6a66d68eac85262ac173989f99ae5bc0ea8c192bd1504d3f2
-
-USER 1001
-
-COPY --chown=1001:0 requirements.txt /tmp/requirements.txt
-
-RUN python -m pip install --no-cache-dir -r /tmp/requirements.txt && \
-    rm /tmp/requirements.txt && \
-    fix-permissions /opt/app-root -P
